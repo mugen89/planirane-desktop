@@ -1,0 +1,52 @@
+# Pushing a tag vX.Y.Z builds the setup and publishes it as a GitHub Release. Installed copies find it within
+# six hours (or at once: tray menu > Провери за обновление). The tag must match project(... VERSION X.Y.Z) in
+# CMakeLists.txt; release.ps1 does the bump, the commit, the tag and the push in one go.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The tag matches the version in CMakeLists.txt
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'.TrimStart('v')
+          $m = [regex]::Match((Get-Content CMakeLists.txt -Raw), 'project\(KanbanDesktop VERSION ([0-9.]+)')
+          if ($m.Groups[1].Value -ne $tag) { throw "Tag v$tag does not match CMakeLists.txt ($($m.Groups[1].Value))" }
+
+      - name: Toolchain (WinLibs GCC 16.2.0 UCRT r1, the same as the development PC)
+        shell: pwsh
+        run: |
+          $url = 'https://github.com/brechtsanders/winlibs_mingw/releases/download/16.2.0posix-14.0.0-ucrt-r1/winlibs-x86_64-posix-seh-gcc-16.2.0-mingw-w64ucrt-14.0.0-r1.zip'
+          Invoke-WebRequest $url -OutFile "$env:RUNNER_TEMP\winlibs.zip"
+          7z x "$env:RUNNER_TEMP\winlibs.zip" "-o$env:RUNNER_TEMP\winlibs" -y | Out-Null
+          "$env:RUNNER_TEMP\winlibs\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Build
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { python -m pip install --quiet ninja }
+          g++ --version | Select-Object -First 1
+          ./build.ps1
+
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ github.ref_name }}'
+          $ver = $tag.TrimStart('v')
+          # The notes are this version's section of CHANGELOG.md.
+          $m = [regex]::Match((Get-Content CHANGELOG.md -Raw -Encoding utf8), "(?ms)^## $([regex]::Escape($ver))\b.*?(?=^## |\z)")
+          $notes = if ($m.Success) { $m.Value.Trim() } else { "Версия $ver" }
+          [IO.File]::WriteAllText("$env:RUNNER_TEMP\notes.md", $notes, (New-Object Text.UTF8Encoding $false))
+          gh release create $tag dist/KanbanDesktop-Setup.exe dist/KanbanDesktop-Setup.exe.sha256 --title "Контрол на срокове $ver" --notes-file "$env:RUNNER_TEMP\notes.md"
