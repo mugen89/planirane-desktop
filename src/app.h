@@ -62,7 +62,6 @@ class App {
   void signIn(const std::wstring& server, const std::wstring& username, const std::wstring& password);
   void signOut();
   void refresh();
-  void startTimer();          // without a card: the desktop-only route (the server caps it, maxUnassignedTime)
   void startTimerOnCard(int cardId);  // or, while one runs, attach it to that card
   void refreshSummary();
   // The web's own move (the collector's lanes), so every rule stays on the server: approval, „№ вх. док.“,
@@ -74,7 +73,7 @@ class App {
   void chooseSubview(const std::string& id);
 
   // The tabs on the rail left of the panel (the user's sketch, 2026-11-26).
-  enum class Tab { Table, Clients, AdminDay, Profile };
+  enum class Tab { Table, Calendar, Clients, AdminDay, Profile };
   Tab tab = Tab::Table;
   void setTab(Tab t);
   // „Административни дейности“: one day, as GET /time/day gives it; saved with POST /time/day (only the rows sent).
@@ -89,6 +88,12 @@ class App {
   double dayNoteUntil = 0;
   void loadDay(const std::string& date = {});  // today when empty
   void saveDay(const std::vector<DayRowIn>& rows);
+  // Календар
+  Calendar cal;
+  bool calBusy = false;
+  std::wstring calError;
+  void loadCalendar(int year = 0, int month = 0);  // 0: the month on screen (or this one)
+  double calAt_ = 0;
   // Клиенти
   std::vector<ClientRow> clients;
   bool clientsLoaded = false, clientsBusy = false;

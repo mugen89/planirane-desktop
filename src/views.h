@@ -13,6 +13,7 @@ class Panel : public rt::UiWindow {
   void showAt(RECT at);
   // What a click on a row (column empty) or on a number does — also `--select row:column` from the command line.
   void select(const std::string& row, const std::string& col);
+  void selectDay(const std::string& day) { calSel_ = day; }  // the calendar's day / bucket — also `--shot` for checks
 
  protected:
   void paint() override;
@@ -26,6 +27,7 @@ class Panel : public rt::UiWindow {
   // A list of cards — the table's, a client's: lane menu, start / attach, period, the urgency bar, the forms under it.
   void paintCards(rt::RectF r, const std::vector<const SumCard*>& cards, uint32_t scrollId);
   rt::Color statusColorOf(const std::string& key);  // the urgency band's colour
+  void paintCalendar(rt::RectF area);
   void paintClients(rt::RectF area);
   void paintAdminDay(rt::RectF area);
   void paintProfile(rt::RectF area);
@@ -40,6 +42,7 @@ class Panel : public rt::UiWindow {
   std::string selRow_, selCol_;  // the clicked row ("__total" = ОБЩО) and column ("" = the whole row)
   std::map<int, AttachNeeds> pendingForm_;  // stopped entry id → its ✓ form
   std::map<int, AttachNeeds> attachForm_;  // card id → the attach form (the choice, Дейност, Коментар), seeded from the server
+  std::string calSel_;        // Календар: the chosen day (YYYY-MM-DD), or „outside“ / „undated“
   std::wstring clientQuery_;  // Клиенти: the search
   int selClient_ = 0;         // Клиенти: the chosen one (its cards under it)
   int dayFormSeq_ = -1;       // Админ. дейности: which answer of the server the form was filled from

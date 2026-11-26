@@ -188,6 +188,54 @@ AttachNeeds parseAttachNeeds(const Json& j, const std::wstring& fallback) {
   return n;
 }
 
+SumCard parseCard(const Json& c) {
+  SumCard k;
+  k.id = num(c, "id");
+  k.boardId = num(c, "boardId");
+  k.normSeconds = num(c, "normSeconds");
+  auto cid = c.find("clientId");
+  k.hasClient = cid && cid->t == Json::T::Num;
+  k.awaiting = c.flag("awaiting", false);
+  k.closed = c.flag("closed", false);
+  k.status = c.str("status");
+  k.row = c.str("row");
+  k.laneKey = c.str("laneKey");
+  k.clientId = num(c, "clientId");
+  if (auto p = c.find("period"); p && p->isObj()) {
+    k.periodTag = wstr(*p, "tag");
+    k.periodHint = wstr(*p, "hint");
+    k.carryOver = p->flag("carryOver", false);
+  }
+  k.title = wstr(c, "title");
+  k.clientName = wstr(c, "clientName");
+  k.obligationCode = wstr(c, "obligationCode");
+  k.dueDate = wstr(c, "dueDate");
+  k.lane = wstr(c, "lane");
+  k.worker = wstr(c, "worker");
+  k.notYetVisible = c.flag("notYetVisible", false);
+  k.visibleFrom = wstr(c, "visibleFrom");
+  if (auto b = c.find("band"); b && b->isObj())
+    if (auto h = b->find("color"); h && h->t == Json::T::Str) {
+      k.band = hexColor(h->s);
+      k.hasBand = true;
+      k.bandLabel = wstr(*b, "label");
+    }
+  return k;
+}
+
+Calendar parseCalendar(const Json& j) {
+  Calendar cal;
+  if (auto p = j.find("period"); p && p->isObj()) {
+    cal.year = num(*p, "year");
+    cal.month = num(*p, "month");
+  }
+  cal.loaded = cal.year > 0;
+  if (auto v = j.find("subview"); v && v->isObj()) cal.subviewLabel = wstr(*v, "label");
+  if (auto cards = j.find("cards"); cards && cards->isArr())
+    for (auto& c : cards->a) cal.cards.push_back(parseCard(c));
+  return cal;
+}
+
 Summary parseSummary(const Json& j) {
   Summary s;
   auto sv = j.find("subview");
@@ -218,32 +266,7 @@ Summary parseSummary(const Json& j) {
     for (auto& r : rows->a) s.rows.push_back(parseRow(r));
   if (auto t = j.find("total"); t && t->isObj()) s.total = parseRow(*t);
   if (auto cards = j.find("cards"); cards && cards->isArr())
-    for (auto& c : cards->a) {
-      SumCard k;
-      k.id = num(c, "id");
-      k.boardId = num(c, "boardId");
-      k.normSeconds = num(c, "normSeconds");
-      auto cid = c.find("clientId");
-      k.hasClient = cid && cid->t == Json::T::Num;
-      k.awaiting = c.flag("awaiting", false);
-      k.closed = c.flag("closed", false);
-      k.status = c.str("status");
-      k.row = c.str("row");
-      k.laneKey = c.str("laneKey");
-      k.clientId = num(c, "clientId");
-      if (auto p = c.find("period"); p && p->isObj()) {
-        k.periodTag = wstr(*p, "tag");
-        k.periodHint = wstr(*p, "hint");
-        k.carryOver = p->flag("carryOver", false);
-      }
-      k.title = wstr(c, "title");
-      k.clientName = wstr(c, "clientName");
-      k.obligationCode = wstr(c, "obligationCode");
-      k.dueDate = wstr(c, "dueDate");
-      k.lane = wstr(c, "lane");
-      k.worker = wstr(c, "worker");
-      s.cards.push_back(std::move(k));
-    }
+    for (auto& c : cards->a) s.cards.push_back(parseCard(c));
   return s;
 }
 

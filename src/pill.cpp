@@ -239,13 +239,21 @@ void Pill::render() {
   // transparent — but never fully, or the clicks would fall through the layered window.
   fillRect(D2D1::RectF(0, 0, (float)w, (float)h), cover_ ? plate_ : Color(0, 0, 0, 1.f / 255.f), 0);
   Color ink = light_ ? Color::hex(0x1A1A1A) : Color(1, 1, 1);
-  if (hover_ || down_) {
+  // Running or on pause, the button is a solid plate of its colour with white on it (the user, 2026-11-26: "more accent
+  // on the taskbar if the timer is on") — green while it runs, amber on pause: seen at a glance, from across the room.
+  bool lit = icon_ == PillIcon::Running || icon_ == PillIcon::Paused;
+  if (lit) {
+    bool up = hover_ || down_;
+    Color plate = icon_ == PillIcon::Running ? Color::hex(up ? 0x16A34A : 0x15803D) : Color::hex(up ? 0xD97706 : 0xB45309);
+    fillRect(D2D1::RectF(2 * s, 4 * s, w - 2 * s, h - 4 * s), plate, 5 * s);
+    ink = Color(1, 1, 1);
+  } else if (hover_ || down_) {
     Color plate = light_ ? Color(0, 0, 0, down_ ? 0.09f : 0.055f) : Color(1, 1, 1, down_ ? 0.11f : 0.07f);
     fillRect(D2D1::RectF(2 * s, 4 * s, w - 2 * s, h - 4 * s), plate, 4 * s);
   }
 
   // The stopwatch: its hand shows the seconds while running.
-  Color c = stateColor(icon_, light_);
+  Color c = lit ? Color(1, 1, 1) : stateColor(icon_, light_);
   float cx = 18.f * s, cy = h * 0.5f + 1.f * s, r = 7.f * s, sw = 1.6f * s;
   br->SetColor(c.f());
   rt_->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), r, r), br.Get(), sw);
@@ -272,7 +280,7 @@ void Pill::render() {
     drawText(l1_, lineStyle(13.f * s, 600), D2D1::RectF(x, 0, right, (float)h), ink);
   } else {
     drawText(l1_, lineStyle(13.f * s, 600), D2D1::RectF(x, h * 0.5f - 17.f * s, right, h * 0.5f + 1.f * s), ink);
-    drawText(l2_, lineStyle(11.5f * s, 400), D2D1::RectF(x, h * 0.5f + 0.f * s, right, h * 0.5f + 16.f * s), ink.alpha(0.72f));
+    drawText(l2_, lineStyle(11.5f * s, 400), D2D1::RectF(x, h * 0.5f + 0.f * s, right, h * 0.5f + 16.f * s), ink.alpha(lit ? 0.9f : 0.72f));
   }
   HRESULT hr = rt_->EndDraw();
   if (hr == (HRESULT)D2DERR_RECREATE_TARGET) {

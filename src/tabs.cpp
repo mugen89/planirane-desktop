@@ -77,12 +77,187 @@ std::wstring longDate(const std::string& iso) {  // „четвъртък, 26.11
   swprintf(b, 64, L"%ls, %02d.%02d.%04d", kDays[t.wDayOfWeek % 7], t.wDay, t.wMonth, t.wYear);
   return b;
 }
+int daysInMonth(int y, int m) {
+  static const int k[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  if (m == 2) return (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) ? 29 : 28;
+  return k[(m + 11) % 12];
+}
 std::wstring selfExe() {
   wchar_t p[MAX_PATH];
   DWORD n = GetModuleFileNameW(nullptr, p, MAX_PATH);
   return std::wstring(p, n);
 }
 }  // namespace
+
+// ================================================================ Календар
+// GET /desktop/calendar — the board as ▧ in the browser (CalendarView.tsx): cards on their due date, future ones too (the
+// calendar ignores „дни преди“, to plan ahead), those not on the boards yet faded; due in another month, or undated, in
+// the two buckets above the grid. A day (or a bucket) → its cards, with everything a card has in the table.
+void Panel::paintCalendar(RectF area) {
+  App& a = app();
+  const UiPalette& P = ui.pal;
+  const Calendar& cal = a.cal;
+  static const wchar_t* kMonths[] = {L"", L"януари", L"февруари", L"март", L"април", L"май", L"юни",
+                                     L"юли", L"август", L"септември", L"октомври", L"ноември", L"декември"};
+  float y = area.t;
+  std::wstring title = L"Календар" + (cal.subviewLabel.empty() ? std::wstring() : L"  ·  " + cal.subviewLabel);
+  ui.text(RectF(area.l + 4, y, area.r - 340, y + 30), title, 16.f, P.text, 700);
+  if (cal.loaded) {
+    SYSTEMTIME now;
+    GetLocalTime(&now);
+    bool current = cal.year == now.wYear && cal.month == now.wMonth;
+    int py = cal.month == 1 ? cal.year - 1 : cal.year, pm = cal.month == 1 ? 12 : cal.month - 1;
+    int ny = cal.month == 12 ? cal.year + 1 : cal.year, nm = cal.month == 12 ? 1 : cal.month + 1;
+    RectF prev(area.r - 276, y + 1, area.r - 240, y + 29), label(area.r - 236, y, area.r - 40, y + 30), next(area.r - 36, y + 1, area.r, y + 29);
+    if (ui.iconButton(ui.id("cprev"), prev, kPrev, L"Предишен месец", !a.calBusy)) {
+      calSel_.clear();
+      after([py, pm] { app().loadCalendar(py, pm); });
+    }
+    ui.text(label, std::wstring(kMonths[cal.month]) + L" " + num(cal.year), 13.f, P.text, 600, Align::Center);
+    if (ui.iconButton(ui.id("cnext"), next, kNext, L"Следващ месец", !a.calBusy)) {
+      calSel_.clear();
+      after([ny, nm] { app().loadCalendar(ny, nm); });
+    }
+    if (!current && ui.link(ui.id("ctoday"), RectF(area.r - 330, y, area.r - 282, y + 30), L"днес", 12.f)) {
+      calSel_.clear();
+      int ty = now.wYear, tm = now.wMonth;
+      after([ty, tm] { app().loadCalendar(ty, tm); });
+    }
+  }
+  y += 40;
+  if (!cal.loaded) {
+    bool err = !a.calError.empty();
+    ui.text(RectF(area.l + 4, y, area.r, y + 40), err ? a.calError : L"Зарежда календара…", 12.5f, err ? P.danger : P.dim, 400, Align::Left,
+            VAlign::Top, true);
+    return;
+  }
+
+  // the cards by day, and the two buckets
+  char ym[8];
+  snprintf(ym, sizeof ym, "%04d-%02d", cal.year, cal.month);
+  std::wstring wym = widen(ym);
+  std::map<std::wstring, std::vector<const SumCard*>> byDay;
+  std::vector<const SumCard*> outside, undated;
+  for (auto& k : cal.cards) {
+    if (k.dueDate.size() < 10) undated.push_back(&k);
+    else if (k.dueDate.compare(0, 7, wym) != 0) outside.push_back(&k);
+    else byDay[k.dueDate.substr(0, 10)].push_back(&k);
+  }
+  std::sort(outside.begin(), outside.end(), [](const SumCard* x, const SumCard* z) { return x->dueDate < z->dueDate; });
+
+  auto bucket = [&](RectF b, const std::wstring& text, int n, const char* key) {
+    bool on = calSel_ == key;
+    bool hot = ui.hot(b);
+    ui.p->rrect(b, 7, on ? P.accent.withA(0.16f) : P.text.withA(hot ? 0.08f : 0.045f));
+    ui.text(RectF(b.l + 12, b.t, b.r - 8, b.b), text + L"  ·  " + num(n), 12.f, P.text, on ? 700 : 600);
+    if (hot) ui.cursor = LoadCursorW(nullptr, IDC_HAND);
+    if (ui.press(ui.id("cbucket", key[0]), b)) {
+      calSel_ = on ? "" : key;
+      ui.scrollTo(ui.id("calcards"), 0);
+    }
+  };
+  std::wstring outsideText = L"⏮ Със срок извън " + std::wstring(kMonths[cal.month]);
+  if (!outside.empty() || !undated.empty()) {
+    float x = area.l;
+    if (!outside.empty()) {
+      float w = ui.textWidth(outsideText + L"  ·  " + num((int)outside.size()), 12.f, 700) + 26;
+      bucket(RectF(x, y, x + w, y + 30), outsideText, (int)outside.size(), "outside");
+      x += w + 8;
+    }
+    if (!undated.empty()) {
+      float w = ui.textWidth(std::wstring(L"Без срок  ·  ") + num((int)undated.size()), 12.f, 700) + 26;
+      bucket(RectF(x, y, x + w, y + 30), L"Без срок", (int)undated.size(), "undated");
+    }
+    y += 40;
+  }
+
+  // the selection: a day of this month, or a bucket
+  bool isBucket = calSel_ == "outside" || calSel_ == "undated";
+  if (!calSel_.empty() && !isBucket && calSel_.compare(0, 7, ym) != 0) calSel_.clear();  // another month is on screen
+  std::vector<const SumCard*> selCards;
+  std::wstring selTitle;
+  if (calSel_ == "outside") {
+    selCards = outside;
+    selTitle = outsideText;
+  } else if (calSel_ == "undated") {
+    selCards = undated;
+    selTitle = L"Без срок";
+  } else if (!calSel_.empty()) {
+    auto it = byDay.find(widen(calSel_));
+    if (it != byDay.end()) selCards = it->second;
+    selTitle = longDate(calSel_);
+  }
+  bool selected = !calSel_.empty();
+
+  // the grid: Monday first; a chosen day keeps only its week, a chosen bucket none
+  if (!isBucket) {
+    int days = daysInMonth(cal.year, cal.month);
+    SYSTEMTIME first;
+    parseIso(std::string(ym) + "-01", first);
+    int lead = (first.wDayOfWeek + 6) % 7;
+    int weeks = (lead + days + 6) / 7;
+    int selWeek = selected ? (lead + atoi(calSel_.substr(8, 2).c_str()) - 1) / 7 : -1;
+    static const wchar_t* kWeekdays[] = {L"пн", L"вт", L"ср", L"чт", L"пт", L"сб", L"нд"};
+    float colW = area.w() / 7;
+    for (int d = 0; d < 7; d++)
+      ui.text(RectF(area.l + d * colW + 8, y, area.l + (d + 1) * colW, y + 22), kWeekdays[d], 11.f, d >= 5 ? P.faint : P.dim, 600);
+    y += 24;
+    float cellH = selected ? 112.f : std::max(64.f, (area.b - y) / weeks);
+    std::string today = todayIso();
+    int row = 0;
+    for (int w = 0; w < weeks; w++) {
+      if (selected && w != selWeek) continue;
+      for (int d = 0; d < 7; d++) {
+        int day = w * 7 + d - lead + 1;
+        RectF cell(area.l + d * colW + 1, y + row * cellH + 1, area.l + (d + 1) * colW - 1, y + (row + 1) * cellH - 1);
+        if (day < 1 || day > days) {
+          ui.p->rrect(cell, 6, P.text.withA(0.02f));
+          continue;
+        }
+        char iso[16];
+        snprintf(iso, sizeof iso, "%s-%02d", ym, day);
+        auto it = byDay.find(widen(iso));
+        const std::vector<const SumCard*>* list = it == byDay.end() ? nullptr : &it->second;
+        bool isToday = today == iso, isSel = calSel_ == iso, hot = ui.hot(cell);
+        ui.p->rrect(cell, 6, isSel ? P.accent.withA(0.14f) : d >= 5 ? P.text.withA(0.045f) : P.card);
+        ui.p->rrectStroke(cell.inset(0.5f), 6, isToday ? P.accent : P.stroke, isToday ? 1.6f : 1.f);
+        ui.text(RectF(cell.l + 8, cell.t + 3, cell.r - 40, cell.t + 22), num(day), 12.f, isToday ? P.accent : P.text, isToday ? 700 : 600);
+        if (list) {
+          int n = (int)list->size();
+          ui.text(RectF(cell.r - 44, cell.t + 3, cell.r - 8, cell.t + 22), num(n), 11.f, P.dim, 600, Align::Right);
+          float cy = cell.t + 24;
+          int room = std::max(0, (int)((cell.b - 4 - cy) / 19));
+          int show = n > room ? std::max(0, room - 1) : n;
+          for (int i = 0; i < show; i++) {
+            const SumCard& k = *(*list)[i];
+            RectF chip(cell.l + 4, cy, cell.r - 4, cy + 17);
+            float fade = k.notYetVisible ? 0.5f : 1.f;  // not on the boards yet: as the browser draws it, faded
+            Color edge = k.hasBand ? k.band : statusColorOf(k.status);
+            ui.p->rrect(chip, 3, P.text.withA(0.05f));
+            ui.p->rrect(RectF(chip.l, chip.t, chip.l + 4, chip.b), 2, edge.alpha(fade));
+            std::wstring t = (k.closed ? L"✓ " : L"") + (k.clientName.empty() ? k.title : k.clientName + L" · " + k.title);
+            ui.text(RectF(chip.l + 8, chip.t, chip.r - 2, chip.b), t, 10.5f, (k.closed ? P.dim : P.text).alpha(fade));
+            cy += 19;
+          }
+          if (show < n) ui.text(RectF(cell.l + 8, cy, cell.r - 4, cy + 17), L"+ още " + num(n - show), 10.5f, P.dim, 600);
+          if (hot) ui.cursor = LoadCursorW(nullptr, IDC_HAND);
+          if (ui.press(ui.id("cday", day), cell)) {
+            calSel_ = isSel ? std::string() : std::string(iso);
+            ui.scrollTo(ui.id("calcards"), 0);
+          }
+        }
+      }
+      row++;
+    }
+    y += (selected ? 1 : weeks) * cellH + 6;
+  }
+  if (!selected) return;
+
+  // the chosen day's (or bucket's) cards — the same list as the table's
+  ui.text(RectF(area.l + 4, y + 4, area.r - 40, y + 28), selTitle + L"  —  " + num((int)selCards.size()) + L" карти", 12.5f, P.text, 600);
+  if (ui.iconButton(ui.id("ccl"), RectF(area.r - 32, y + 2, area.r, y + 30), kClose, L"Затвори — целият месец")) calSel_.clear();
+  paintCards(RectF(area.l, y + 34, area.r, area.b), selCards, ui.id("calcards"));
+}
 
 // ================================================================ Клиенти
 // GET /clients — the browser's list (its visibility, the first business line in scope). A click on a client shows its

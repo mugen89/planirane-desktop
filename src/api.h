@@ -77,6 +77,10 @@ struct SumCard {
   std::string laneKey;  // upcoming / in_progress / review / done — what POST /collector/cards/:id/move takes
   std::wstring periodTag, periodHint;  // „[10.2026]“, „⏮ [09.2026]“, „[10.2026][44]“ — the browser card's, as the server writes it
   bool carryOver = false;              // from an earlier period (⏮): the browser shows its tag stronger
+  // The calendar's (GET /desktop/calendar): not on the boards yet (the lead-time window), from when; the band colour.
+  bool notYetVisible = false, hasBand = false;
+  std::wstring visibleFrom, bandLabel;
+  rt::Color band;
   std::wstring title, clientName, obligationCode, dueDate, lane, worker;
 };
 // A view of the unified board this person may open (the web's subview bar): ex-clients, mp-people, …
@@ -96,6 +100,16 @@ struct Summary {
   std::map<std::string, rt::Color> bandColors;  // urgency band key → its colour (`columns`), for the bar on every card
 };
 Summary parseSummary(const rt::Json& j);
+
+// The unified board's calendar — GET /desktop/calendar: as ▧ in the browser, future cards included (the calendar ignores
+// „дни преди“), in the table's scope. Cards in the table's format.
+struct Calendar {
+  bool loaded = false;
+  int year = 0, month = 0;
+  std::wstring subviewLabel;
+  std::vector<SumCard> cards;
+};
+Calendar parseCalendar(const rt::Json& j);
 
 // What the server wants before it takes an entry on a card — 422 `time_detail_required`: a choice from the activity's
 // option set and/or, on a project task, „Дейност“ + „Коментар“. Any other refusal: only `message`.

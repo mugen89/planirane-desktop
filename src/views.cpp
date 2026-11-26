@@ -112,7 +112,8 @@ void Panel::paint() {
   // ---- header
   ui.text(RectF(x, y, x + cw - 120, y + 22), L"Контрол на срокове", 15, P.text, 600);
   std::wstring who = a.user.name.empty() ? a.user.username : a.user.name;
-  std::wstring where = a.tab == App::Tab::Clients    ? L"Клиенти"
+  std::wstring where = a.tab == App::Tab::Calendar   ? L"Календар"
+                      : a.tab == App::Tab::Clients  ? L"Клиенти"
                       : a.tab == App::Tab::AdminDay ? L"Административни дейности"
                       : a.tab == App::Tab::Profile  ? L"Профил и настройки"
                       : a.summary.loaded            ? a.summary.subviewLabel
@@ -136,6 +137,7 @@ void Panel::paint() {
   y = paintUnassigned(RectF(x, y, x + cw, H));
   RectF content(x, y + 10, x + cw, H - 46);
   switch (a.tab) {
+    case App::Tab::Calendar: paintCalendar(content); break;
     case App::Tab::Clients: paintClients(content); break;
     case App::Tab::AdminDay: paintAdminDay(content); break;
     case App::Tab::Profile: paintProfile(content); break;
@@ -178,21 +180,24 @@ float Panel::paintTimer(RectF r) {
   // for work that has no card yet (the user, 2026-11-26: "after adding the summary the stopwatch without an item
   // becomes a bit useless"). Running, it is the big clock and its buttons.
   r.b = r.t + (st.hasRunning ? 64.f : 46.f);
-  ui.card(r, 10);
+  // Its colour says its state at a glance (the user, 2026-11-26): green while it runs, amber on pause, plain when idle.
+  if (st.hasRunning) {
+    Color c = running ? green : amber;
+    ui.p->rrect(r, 10, c.withA(P.dark ? 0.20f : 0.12f));
+    ui.p->rrectStroke(r.inset(0.75f), 10, c.withA(0.70f), 1.5f);
+    ui.p->rrect(RectF(r.l + 3, r.t + 6, r.l + 9, r.b - 6), 3.f, c);
+  } else {
+    ui.card(r, 10);
+  }
   float bh = 34, by = r.cy() - bh / 2, bw = 116, gap = 8;
   if (!st.hasRunning) {
+    // No stopwatch without a card any more (the user, 2026-11-26): it starts on a card — „Пусни“ in the table.
     std::wstring line = !a.haveState ? (a.offline ? L"Няма връзка със сървъра" : L"Зарежда…")
                                      : L"Хронометърът не тече  ·  днес " + clockText(st.todaySeconds, false) +
                                            (st.unattributed ? L"  ·  за разпределяне " + num(st.unattributed) : L"");
     ui.glyph(RectF(r.l + 12, r.t, r.l + 36, r.b), kStopwatch, 15.f, P.dim);
-    ui.text(RectF(r.l + 40, r.t, r.r - 170, r.b), line, 12.5f, P.text);
-    bool blocked = !st.pending.empty() || (st.maxUnassigned > 0 && st.unattributed >= st.maxUnassigned);
-    RectF b(r.r - 8 - 146, r.cy() - 15, r.r - 8, r.cy() + 15);
-    if (ui.button(ui.id("start"), b, L"Без карта", Btn::Standard, kPlay, a.haveState && st.canTrack && !a.busy && !blocked))
-      after([] { app().startTimer(); });
-    ui.tooltip(b, !st.pending.empty() ? L"Първо решете спряното време (✓ или ✕)."
-                  : blocked           ? L"Стигнат е таванът на неразпределените записи — разпределете ги (под хронометъра)."
-                                      : L"Хронометър без карта — картата се избира после: „Закачи“ на картата или „За разпределяне“.");
+    ui.text(RectF(r.l + 40, r.t, r.r - 330, r.b), line, 12.5f, P.text);
+    ui.text(RectF(r.r - 320, r.t, r.r - 16, r.b), L"Пуска се от картата: „Пусни“ в таблицата или календара", 11.5f, P.dim, 400, Align::Right);
   } else {
     int secs = a.runningSeconds();
     ui.text(RectF(r.l + 16, r.t + 6, r.l + 190, r.t + 40), clockText(secs, true), 26, running ? green : amber, 600);
@@ -597,7 +602,7 @@ void Panel::paintCards(RectF cardsR, const std::vector<const SumCard*>& cards, u
     ui.card(cr, 8);
     RectF top(cr.l, cr.t, cr.r, cr.t + 46);
     // The urgency colour (days left) as a bar the whole height of the card — 7 px, to be seen (the user, 2026-11-26).
-    ui.p->rrect(RectF(cr.l + 2, cr.t + 3, cr.l + 9, cr.b - 3), 3.f, k.closed ? green : statusColorOf(k.status));
+    ui.p->rrect(RectF(cr.l + 2, cr.t + 3, cr.l + 9, cr.b - 3), 3.f, k.hasBand ? k.band : k.closed ? green : statusColorOf(k.status));
     const float textR = k.closed ? top.r - 12 : top.r - 282;
     // The period „[10.2026]“ at the right of the title, bold — as on the browser's card; stronger when carried over (⏮).
     float pw = k.periodTag.empty() ? 0.f : ui.textWidth(k.periodTag, 12.f, 700) + 6;
@@ -612,6 +617,7 @@ void Panel::paintCards(RectF cardsR, const std::vector<const SumCard*>& cards, u
     if (k.closed) sub += L"  ·  приключена";
     if (!k.worker.empty()) sub += L"  ·  " + k.worker;
     if (k.awaiting) sub += L"  ·  чака одобрение";
+    if (k.notYetVisible && !k.visibleFrom.empty()) sub += L"  ·  на дъските от " + shortDate(k.visibleFrom);
     ui.text(RectF(top.l + 20, top.t + 21, textR, top.b - 3), sub, 11.f, P.dim);
     if (k.closed) continue;
     int id = k.id;
@@ -791,6 +797,7 @@ void Rail::paint() {
   };
   static const Item kItems[] = {
       {App::Tab::Table, L"\xE8FD", L"Таблица"},
+      {App::Tab::Calendar, L"\xE787", L"Календар"},
       {App::Tab::Clients, L"\xE716", L"Клиенти"},
       {App::Tab::AdminDay, L"\xE823", L"Админ. дейности"},
       {App::Tab::Profile, L"\xE77B", L"Профил"},

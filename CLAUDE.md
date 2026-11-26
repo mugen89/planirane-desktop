@@ -19,7 +19,8 @@ Guidance for Claude Code in this repository: **Kanban Desktop**, the Windows com
   `WS_EX_NOACTIVATE` and answers `WM_MOUSEACTIVATE` with `MA_NOACTIVATE`. Anything clickable next to the panel must do
   the same, or a click on it closes the panel.
 - **„За разпределяне“ lives here.** The browser has had no screen for attaching time without a card since its time pane
-  went (2026-09-08); a stopwatch started here without a card can only get its card here. Keep it working.
+  went (2026-09-08); entries recorded without a card (before 0.5.0 the desktop could start one) get their card only
+  here. Keep it working. No new stopwatch without a card: the user removed that in 0.5.0.
 - **Test writes on a scratch copy, not on :8106.** Moves write card history and close cards; a view change writes the
   person's own preference (on :8106 that is the user's admin account). Copy `kanban_merge` to a scratch database, run
   the `kanban-app:merge` image on :8199 against it, point a test copy (`KANBANDESKTOP_DATA`) there, drop it all after.
@@ -35,7 +36,7 @@ Guidance for Claude Code in this repository: **Kanban Desktop**, the Windows com
   Do not try to switch Widgets off programmatically: UCPD refuses it to every ordinary process.
 - **Testing on the user's PC: never synthetic keyboard or mouse input.** The first test session typed into
   the user's live desktop (the sign-in window took their keystrokes). Drive the app with its command line
-  (`--start`, `--panel`, `--quit` …), isolate it with `KANBANDESKTOP_DATA`, take screenshots (read-only), and
+  (`--panel`, `--tab:…`, `--quit` …), isolate it with `KANBANDESKTOP_DATA`, take screenshots (read-only), and
   run `tests/test_api.cpp` for the API. A sign-in for tests = a session cookie from the API, DPAPI-protected
   (entropy `KanbanDesktop.session.v1`, CurrentUser) into `session.dat`. Clean up: the test's time entries,
   their `time_entry_log` rows (a trigger writes them) and the test session.

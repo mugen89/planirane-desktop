@@ -267,7 +267,6 @@ void App::command(const std::wstring& c) {
     refresh();
     refreshSummary();
   }
-  else if (c == L"start") startTimer();
   else if (c == L"pause") pauseTimer();
   else if (c == L"resume") resumeTimer();
   else if (c == L"stop") stopTimer();
@@ -285,6 +284,7 @@ void App::command(const std::wstring& c) {
     if (gfx().ensure()) {
       Panel shot;
       shot.select(parts.size() > 1 ? narrow(parts[1]) : "", parts.size() > 2 ? narrow(parts[2]) : "");
+      shot.selectDay(parts.size() > 1 ? narrow(parts[1]) : "");  // on the calendar: a day (YYYY-MM-DD), „outside“, „undated“
       float s = 1;
       RECT at = panelRect(s);  // the real panel's size on this screen, in DIPs
       int w = (int)((at.right - at.left) / s), h = (int)((at.bottom - at.top) / s);
@@ -301,7 +301,11 @@ void App::command(const std::wstring& c) {
     }
   } else if (c.rfind(L"tab:", 0) == 0) {  // tab:table|clients|day|profile — what a tab on the rail does
     std::wstring t = c.substr(4);
-    setTab(t == L"clients" ? Tab::Clients : t == L"day" ? Tab::AdminDay : t == L"profile" ? Tab::Profile : Tab::Table);
+    setTab(t == L"calendar" ? Tab::Calendar : t == L"clients" ? Tab::Clients : t == L"day" ? Tab::AdminDay
+           : t == L"profile" ? Tab::Profile : Tab::Table);
+  } else if (c.rfind(L"calmonth:", 0) == 0) {  // calmonth:<YYYY-MM> — the calendar's ‹ ›
+    std::string ym = narrow(c.substr(9));
+    if (ym.size() >= 7) loadCalendar(atoi(ym.substr(0, 4).c_str()), atoi(ym.substr(5, 2).c_str()));
   } else if (c.rfind(L"daydate:", 0) == 0) {  // daydate:<YYYY-MM-DD> — the day stepper
     loadDay(narrow(c.substr(8)));
   } else if (c.rfind(L"dayset:", 0) == 0) {  // dayset:<activity>:<time>[:<comment>] — one row of the day, saved
@@ -448,6 +452,7 @@ void App::signOut() {
   attachingCards.clear();
   pendingNeeds.clear();
   day = {};
+  cal = {};
   clients.clear();
   clientsLoaded = false;
   me = {};
@@ -476,6 +481,7 @@ void App::sessionLost() {
   attachingCards.clear();
   pendingNeeds.clear();
   day = {};
+  cal = {};
   clients.clear();
   clientsLoaded = false;
   me = {};
@@ -545,7 +551,6 @@ void App::action(const wchar_t* method, const std::string& path, const Json* bod
   });
 }
 
-void App::startTimer() { action(L"POST", "/api/time/start", nullptr); }
 
 void App::startTimerOnCard(int cardId) {
   Json b = Json::object();
@@ -586,6 +591,7 @@ void App::moveCard(int cardId, const std::string& lane, const std::wstring& refe
       cardProblems[cardId] = p;
     }
     refreshSummary();
+    if (tab == Tab::Calendar) loadCalendar(cal.year, cal.month);  // the move shows there too
     if (panel_) panel_->invalidate();
   });
 }
@@ -616,11 +622,39 @@ void App::chooseSubview(const std::string& id) {
 
 void App::setTab(Tab t) {
   tab = t;
+  if (t == Tab::Calendar) loadCalendar(cal.year, cal.month);
   if (t == Tab::Clients && !clientsBusy) loadClients();
   if (t == Tab::AdminDay) loadDay(day.date);
   if (t == Tab::Profile) loadMe();
   if (panel_) panel_->invalidate();
   if (rail_) rail_->invalidate();
+}
+
+void App::loadCalendar(int year, int month) {
+  if (!signedIn || calBusy) return;
+  if (year <= 0 || month <= 0) {
+    SYSTEMTIME t;
+    GetLocalTime(&t);
+    year = t.wYear;
+    month = t.wMonth;
+  }
+  char path[112];
+  snprintf(path, sizeof path, "/api/desktop/calendar?year=%d&month=%d", year, month);
+  std::string url = path;
+  if (!subviewChoice.empty()) url += "&subview=" + subviewChoice;
+  calBusy = true;
+  calAt_ = nowSec();
+  calError.clear();
+  api.send(L"GET", url, nullptr, [this](const Reply& r) {
+    calBusy = false;
+    if (r.status == 401) {
+      sessionLost();
+      return;
+    }
+    if (r.ok()) cal = parseCalendar(r.json);
+    else calError = r.status == 404 ? L"Сървърът още няма календара за настолното приложение — нужна е по-нова версия на сървъра." : r.error;
+    if (panel_) panel_->invalidate();
+  });
 }
 
 void App::loadDay(const std::string& date) {
@@ -1004,9 +1038,8 @@ void App::trayMenu(POINT at) {
   if (signedIn) {
     add(kMenuPanel, L"Отвори панела");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-    if (!st.hasRunning) add(kMenuStart, L"Пусни хронометъра (без карта)", haveState && st.pending.empty());
-    else if (st.running.paused) add(kMenuResume, L"Продължи");
-    else add(kMenuPause, L"Пауза");
+    if (st.hasRunning && st.running.paused) add(kMenuResume, L"Продължи");
+    else if (st.hasRunning) add(kMenuPause, L"Пауза");
     if (st.hasRunning) add(kMenuStop, L"Спри хронометъра");
     add(kMenuRefresh, L"Обнови");
   } else {
@@ -1026,7 +1059,6 @@ void App::trayMenu(POINT at) {
   DestroyMenu(m);
   switch (cmd) {
     case kMenuPanel: togglePanel(); break;
-    case kMenuStart: startTimer(); break;
     case kMenuPause: pauseTimer(); break;
     case kMenuResume: resumeTimer(); break;
     case kMenuStop: stopTimer(); break;
@@ -1057,6 +1089,7 @@ void App::tick() {
   }
   if (signedIn && nowSec() - lastPoll_ >= kPollEvery) refresh();
   if (signedIn && panel_ && panel_->visible() && nowSec() - summaryAt_ >= 60) refreshSummary();  // while someone looks
+  if (signedIn && panel_ && panel_->visible() && tab == Tab::Calendar && nowSec() - calAt_ >= 60) loadCalendar(cal.year, cal.month);
   if (dayNoteUntil > 0 && nowSec() >= dayNoteUntil) {
     dayNoteUntil = 0;
     dayNote.clear();
