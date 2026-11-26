@@ -18,6 +18,10 @@ Guidance for Claude Code in this repository: **Kanban Desktop**, the Windows com
 - **The rail never activates.** The panel hides when it loses activation (a click elsewhere); the rail beside it is
   `WS_EX_NOACTIVATE` and answers `WM_MOUSEACTIVATE` with `MA_NOACTIVATE`. Anything clickable next to the panel must do
   the same, or a click on it closes the panel.
+- **Win+Q is a low-level keyboard hook** (`winq.cpp`) on its own thread — keep it that way: a hook on the UI thread
+  would stall everyone's typing whenever a window is busy. It swallows only a plain Win+Q (and that Q's release) and
+  sends the unassigned key 0xE8 (tagged, ignored by the hook) so Windows does not open Start. It can only be tested by
+  the person pressing the keys — never simulate keyboard input on their PC; `--overlay` opens what Win+Q opens.
 - **Every window the app draws must be in the frame list** (`Frames` in `App::run`): a window left out repaints only when
   input wakes it — the rail's highlight lagged one click until 0.6.0.
 - **Tabs follow the browser's and the server's rules** (`App::tabAllowed`): Админ. дейности needs the right to track time,

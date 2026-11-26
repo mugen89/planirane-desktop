@@ -26,6 +26,7 @@ enum : UINT {
   WM_APP_TRAY,               // tray icon callback
   WM_APP_SHOWPANEL,          // a second copy was started: show ourselves
   WM_APP_COMMAND,            // run App::command once the loop is up
+  WM_APP_WINQ,               // Win+Q was pressed (the keyboard hook's thread, winq.cpp)
 };
 
 class App {
@@ -126,6 +127,10 @@ class App {
   Me me;
   void loadMe();
   void setPillOn(bool on);
+  // Win+Q: the board over a dimmed screen — the panel large in the middle of the monitor, the rail beside it. Win+Q
+  // again, Esc, or a click on the dimmed part closes it. The setting switches the keyboard hook on and off.
+  void showOverlay();
+  void setWinQ(bool on);
   // „За разпределяне“: an entry is picked (armed) under the stopwatch, then a card in the table takes it — „Сложи тук“.
   // The browser has no screen for this any more (its time pane went on 2026-09-08), so the desktop is where it is done.
   void armEntry(int entryId);  // 0 = none
@@ -185,6 +190,10 @@ class App {
   bool summaryAgain_ = false;  // asked for while one was on its way (e.g. right after a move): once more when it lands
   RECT panelRect(float& scale, RECT* rail = nullptr);  // above the taskbar button, almost as tall as the work area; the rail left of it
   std::unique_ptr<Rail> rail_;
+  RECT overlayRect(float& scale, RECT* rail, RECT* monitor);  // centred on the monitor under the mouse
+  HWND dim_ = nullptr;   // the dimmed screen behind the overlay — never activated; a click on it closes
+  bool overlay_ = false;  // the panel is open as the overlay (not as the flyout)
+  static LRESULT CALLBACK dimProc(HWND h, UINT m, WPARAM w, LPARAM l);
   double panelHiddenAt_ = 0;  // a click on the tray icon first closes the flyout; it must not reopen it
   int stateSeq_ = 0;          // answers older than the newest request are ignored
 };

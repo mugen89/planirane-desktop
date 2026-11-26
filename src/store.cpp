@@ -21,6 +21,7 @@ void Config::load() {
   server = widen(j.str("server"));
   username = widen(j.str("username"));
   pill = j.flag("pill", pill);
+  winq = j.flag("winq", winq);
   updateTried = j.str("updateTried");
   updateTriedAt = j.num("updateTriedAt", 0);
 }
@@ -30,6 +31,7 @@ bool Config::save() const {
   j.set("server", narrow(server));
   j.set("username", narrow(username));
   j.set("pill", pill);
+  j.set("winq", winq);
   j.set("updateTried", updateTried);
   j.set("updateTriedAt", updateTriedAt);
   return writeFileAtomic(configPath(), j.dump(), true);

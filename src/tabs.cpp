@@ -1325,6 +1325,10 @@ void Panel::paintProfile(RectF area) {
     std::wstring exe = selfExe();
     after([autostart, exe] { setAutostart(autostart == 1, exe); });
   }
+  int wq = toggleRow(ui.id("pwinq"), L"Win+Q — таблицата на цял екран", a.cfg.winq, true,
+                     L"Затъмнява екрана и показва таблицата голяма; Esc или щракване встрани я затваря. Докато е включено, "
+                     L"Win+Q не отваря търсенето на Windows — Win+S го отваря.");
+  if (wq >= 0) after([wq] { app().setWinQ(wq == 1); });
   ui.text(RectF(c2.l + 18, yy, c2.r - 240, yy + 32), L"Версия " + widen(KD_VERSION_STR), 12.5f, P.text);
   if (ui.button(ui.id("pupd"), RectF(c2.r - 230, yy + 1, c2.r - 18, yy + 31), a.updateBusy ? L"Обновява се…" : L"Провери за обновление",
                 Btn::Standard, kSync, !a.updateBusy))

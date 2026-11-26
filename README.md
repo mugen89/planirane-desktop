@@ -49,6 +49,7 @@ most once a day.
 | | |
 |---|---|
 | The rail left of the panel | Tabs: Таблица · Админ. дейности · Клиенти · Календар · Одитен график · Профил (Админ. дейности only for people who track time; Одитен график only when the person has audit cards — admins and audit staff). It never takes the keyboard, so a click on it leaves the panel open |
+| **Win+Q** | The board over a dimmed screen: the panel large in the middle of the monitor, the rail beside it. Win+Q again, Esc or a click on the dimmed part closes it. Switched in Профил → „Win+Q — таблицата на цял екран“ (on); while on, Win+Q no longer opens Windows Search (Win+S does) |
 | Click the stopwatch on the taskbar | The panel: the stopwatch (start, pause, resume, stop, cancel; stopped time waits for ✓ / ✕) and the unified board's summary table |
 | The views above the table | The same views as in the browser („Изп.“ / „УС“, as your role allows). The choice is remembered on the server for you, so the browser opens on it too |
 | Click a row or a number in the table | The table collapses to that row and its cards take the room (the name again, or ✕, brings the table back); „Пусни“ starts the stopwatch on a card, „Закачи“ moves a running stopwatch onto it |
@@ -62,7 +63,7 @@ most once a day.
 The stopwatch starts on a card only („Пусни“ in the table, the calendar or a client's cards) — starting without one was
 removed in 0.5.0 at the user's request. Entries recorded earlier without a card are still attached from „За разпределяне“.
 
-Command line (talks to the copy already running): `KanbanDesktop.exe --panel | --hide | --pause |
+Command line (talks to the copy already running): `KanbanDesktop.exe --panel | --overlay | --hide | --pause |
 --resume | --stop | --cancel | --refresh | --update | --signin | --signout | --quit`; for tests, what a click does:
 `--select:<row>[:<column>]` (the table), `--view:<id>` (a view above it), `--arm:<entry>` / `--attach:<entry>:<card>[:<option ids>]` („Избери карта“ / „Сложи тук“), `--confirm:<entry>[:<option ids>]` (✓), `--tab:table|day|clients|calendar|audit|profile`, `--calmonth:<YYYY-MM>`, `--client:<id>` (a client's nomenclature, loaded), `--daydate:<YYYY-MM-DD>`, `--dayset:<activity>:<minutes>[:<comment>]` (one row of „Админ. дейности“, saved), `--dayline:<activity>:<colleague|0>:<client|0|na>:<minutes>[:<comment>]` (a line activity's lines = this line), `--dayabs:<activity>:<minutes>:<from>:<to>[:<substitute>]` (an absence over a period), `--railshot:<file.png>` (the rail off screen), `--move:<card>:<lane>[:<№ вх. док.>]` (a card's
 lane menu), and `--shot:<file.png>[|<row>[|<column>]]` (the panel drawn off screen at its real size).

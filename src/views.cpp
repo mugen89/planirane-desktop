@@ -105,6 +105,13 @@ std::wstring Panel::toUpperBg(const std::wstring& s) {
 void Panel::paint() {
   App& a = app();
   const UiPalette& P = ui.pal;
+  // Esc closes the panel — after an open drop-down and a text being typed have had theirs.
+  if (!ui.anyFocus() && !ui.popupOpen())
+    for (auto& k : ui.keys)
+      if (k.vk == VK_ESCAPE) {
+        after([] { app().hidePanel(); });
+        break;
+      }
   const float W = ui.view.w(), H = ui.view.h();
   const float x = 16, cw = W - 32;
   float y = 12;
@@ -392,11 +399,6 @@ void Panel::paintSummary(RectF area) {
     float xx = area.l + nameW;
     for (size_t k = 0; k < i; k++) xx += cw[k];
     return xx;
-  };
-  auto statusColor = [&](const std::string& key) {
-    for (auto& c : s.layout)
-      if (c.key == "status:" + key && c.hasColor) return c.color;
-    return P.faint;
   };
 
   // ---- header

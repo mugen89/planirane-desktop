@@ -10,6 +10,7 @@ struct Config {
   std::wstring server;            // "http://host:8106"
   std::wstring username;          // prefilled at the next sign-in
   bool pill = true;               // the taskbar button
+  bool winq = true;               // Win+Q opens the board over a dimmed screen (takes Win+Q from Windows Search)
   std::string updateTried;        // the last version an automatic update was attempted for…
   double updateTriedAt = 0;       // …and when (unix seconds): one attempt a day, so a broken release cannot loop
 

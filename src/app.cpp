@@ -13,6 +13,7 @@ void putAnswer(rt::Json& b, const AttachNeeds* answer);
 #include "taskbar.h"
 #include "update.h"
 #include "views.h"
+#include "winq.h"
 
 #include <wtsapi32.h>
 
@@ -160,7 +161,9 @@ int App::run(HINSTANCE inst) {
         if (win && win->wantsFrame()) win->frame();
     }
   };
+  if (cfg.winq && !winqStart(hwnd_, WM_APP_WINQ)) logf("winq: not available");
   pump(Frames{*this});
+  winqStop();
 
   KillTimer(hwnd_, kTick);
   WTSUnRegisterSessionNotification(hwnd_);
@@ -272,6 +275,7 @@ void App::command(const std::wstring& c) {
   else if (c == L"stop") stopTimer();
   else if (c == L"cancel") cancelTimer();
   else if (c == L"update") checkForUpdate(true);
+  else if (c == L"overlay") showOverlay();  // what Win+Q does
   else if (c.rfind(L"shot:", 0) == 0) {  // shot:<png>[|row[|column]] — the panel with this data, drawn off screen (checks)
     std::vector<std::wstring> parts;
     std::wstring rest = c.substr(5);
@@ -859,6 +863,99 @@ void App::loadMe() {
   });
 }
 
+// ---------------------------------------------------------------- Win+Q
+RECT App::overlayRect(float& s, RECT* railOut, RECT* monOut) {
+  POINT pt{};
+  GetCursorPos(&pt);
+  HMONITOR mon = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
+  MONITORINFO mi{};
+  mi.cbSize = sizeof mi;
+  GetMonitorInfoW(mon, &mi);
+  UINT dpi = 96;
+  if (auto f = (UINT(WINAPI*)(HWND))GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForWindow")) dpi = f(hwnd_);
+  TaskbarInfo t = queryTaskbar();
+  s = t.ok ? t.scale : dpi / 96.f;
+  if (monOut) *monOut = mi.rcMonitor;
+  int workW = mi.rcWork.right - mi.rcWork.left, workH = mi.rcWork.bottom - mi.rcWork.top;
+  int railW = (int)(Rail::kWidth * s), gap = (int)(10 * s);
+  int w = std::min<int>((int)(1500 * s), (int)(workW * 0.94f) - railW - gap);
+  int h = (int)(workH * 0.92f);
+  int left = mi.rcWork.left + (workW - (railW + gap + w)) / 2 + railW + gap;
+  int top = mi.rcWork.top + (workH - h) / 2;
+  RECT at{left, top, left + w, top + h};
+  if (railOut) *railOut = RECT{left - gap - railW, top, left - gap, top + h};
+  return at;
+}
+
+LRESULT CALLBACK App::dimProc(HWND h, UINT m, WPARAM w, LPARAM l) {
+  switch (m) {
+    case WM_MOUSEACTIVATE: return MA_NOACTIVATE;  // the board keeps the keyboard
+    case WM_LBUTTONDOWN:
+    case WM_RBUTTONDOWN:
+      if (g_app) g_app->hidePanel();  // a click beside the board closes it
+      return 0;
+    case WM_SETCURSOR: SetCursor(LoadCursorW(nullptr, IDC_ARROW)); return TRUE;
+  }
+  return DefWindowProcW(h, m, w, l);
+}
+
+void App::showOverlay() {
+  if (!signedIn) {
+    showLogin();
+    return;
+  }
+  if (overlay_ && panel_ && panel_->visible()) {  // Win+Q again: closed
+    hidePanel();
+    return;
+  }
+  float s = 1;
+  RECT railAt{}, mon{};
+  RECT at = overlayRect(s, &railAt, &mon);
+  if (!dim_) {
+    WNDCLASSEXW wc{};
+    wc.cbSize = sizeof wc;
+    wc.lpfnWndProc = dimProc;
+    wc.hInstance = inst_;
+    wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    wc.lpszClassName = L"KanbanDesktopDim";
+    RegisterClassExW(&wc);
+    dim_ = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE, wc.lpszClassName, L"", WS_POPUP, 0, 0, 0, 0,
+                           nullptr, nullptr, inst_, nullptr);
+    if (dim_) SetLayeredWindowAttributes(dim_, 0, 150, LWA_ALPHA);  // ≈ 60 % dark: the desk still shows through
+  }
+  // Below first, then the board and the rail above it (each SetWindowPos to TOPMOST lands on top).
+  if (dim_) SetWindowPos(dim_, HWND_TOPMOST, mon.left, mon.top, mon.right - mon.left, mon.bottom - mon.top, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+  if (!panel_) {
+    panel_ = std::make_unique<Panel>();
+    if (!panel_->create(inst_, at)) {
+      panel_.reset();
+      if (dim_) ShowWindow(dim_, SW_HIDE);
+      return;
+    }
+  }
+  overlay_ = true;
+  panel_->showAt(at);
+  if (!rail_) {
+    rail_ = std::make_unique<Rail>();
+    if (!rail_->create(inst_, railAt)) rail_.reset();
+  }
+  if (rail_) rail_->showAt(railAt);
+  refresh();
+  refreshSummary();
+  setTab(Tab::Table);  // the board
+}
+
+void App::setWinQ(bool on) {
+  cfg.winq = on;
+  cfg.save();
+  if (on) {
+    if (!winqStart(hwnd_, WM_APP_WINQ)) logf("winq: not available");
+  } else {
+    winqStop();
+  }
+  if (panel_) panel_->invalidate();
+}
+
 void App::setPillOn(bool on) {
   cfg.pill = on;
   cfg.save();
@@ -1069,6 +1166,8 @@ RECT App::panelRect(float& s, RECT* railOut) {
 }
 
 void App::hidePanel() {
+  if (dim_ && IsWindowVisible(dim_)) ShowWindow(dim_, SW_HIDE);
+  overlay_ = false;
   if (rail_ && rail_->visible()) ShowWindow(rail_->hwnd(), SW_HIDE);
   if (panel_ && panel_->visible()) {
     ShowWindow(panel_->hwnd(), SW_HIDE);
@@ -1259,6 +1358,7 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
   }
   switch (m) {
     case WM_APP_NET: netDeliver(l); return 0;
+    case WM_APP_WINQ: showOverlay(); return 0;
     case WM_APP_SHOWPANEL: command(L"panel"); return 0;
     case WM_APP_COMMAND: {
       auto* cmd = (std::wstring*)l;
