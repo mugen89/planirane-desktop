@@ -80,6 +80,7 @@ struct SumCard {
   // The calendar's (GET /desktop/calendar): not on the boards yet (the lead-time window), from when; the band colour.
   bool notYetVisible = false, hasBand = false;
   std::wstring visibleFrom, bandLabel;
+  std::wstring startDate, closedAt;  // the audit timeline's bar: from — to, and when it closed
   rt::Color band;
   std::wstring title, clientName, obligationCode, dueDate, lane, worker;
 };
@@ -97,6 +98,7 @@ struct Summary {
   SumRow total;
   std::vector<SumCard> cards;
   std::vector<SubviewTab> subviews;  // only those with a table
+  bool hasAuditCards = false;  // the person has audit project cards: the audit timeline is offered (as in the browser)
   std::map<std::string, rt::Color> bandColors;  // urgency band key → its colour (`columns`), for the bar on every card
 };
 Summary parseSummary(const rt::Json& j);
@@ -110,6 +112,31 @@ struct Calendar {
   std::vector<SumCard> cards;
 };
 Calendar parseCalendar(const rt::Json& j);
+
+// The audit timeline — GET /desktop/audit: project → task → card, as „Одитен график“ in the browser; the summaries are
+// the server's (`aggregateAudit`, the same rule the browser's bars use).
+struct AuditAgg {
+  std::string start, end, lastClosed;  // lastClosed empty: nothing closed yet
+  int total = 0, done = 0;
+  bool late = false;
+};
+struct AuditTask {
+  std::wstring title;
+  AuditAgg agg;
+  std::vector<SumCard> cards;
+};
+struct AuditProject {
+  int id = 0;
+  std::wstring name;
+  AuditAgg agg;
+  std::vector<AuditTask> tasks;
+};
+struct AuditTimeline {
+  bool loaded = false;
+  std::string today;
+  std::vector<AuditProject> projects;
+};
+AuditTimeline parseAudit(const rt::Json& j);
 
 // What the server wants before it takes an entry on a card — 422 `time_detail_required`: a choice from the activity's
 // option set and/or, on a project task, „Дейност“ + „Коментар“. Any other refusal: only `message`.
@@ -163,6 +190,21 @@ struct ClientRow {
   std::vector<ClientLine> lines;
 };
 std::vector<ClientRow> parseClients(const rt::Json& j);
+
+// One client's assigned nomenclature — GET /clients/:id (the server limits it to the person's business lines and
+// refuses a client they may not open). Values as the browser's table shows them: the client's override, else the default.
+struct ClientObligation {
+  int departmentId = 0, cycle = 1, dueDay = 0, dueMonth = 0, lead = 0, normSeconds = -1;  // -1: no planned time
+  bool applicable = false, approval = false, monthly = false;
+  std::wstring code, name, hint, assignee;
+};
+struct ClientDetail {
+  bool loaded = false;
+  int id = 0;
+  std::vector<std::pair<int, std::wstring>> lines;  // business line id → name
+  std::vector<ClientObligation> obligations;          // the active ones
+};
+ClientDetail parseClientDetail(const rt::Json& j);
 
 // The person — GET /me.
 struct Me {

@@ -152,6 +152,39 @@ std::vector<ClientRow> parseClients(const Json& j) {
   return out;
 }
 
+ClientDetail parseClientDetail(const Json& j) {
+  ClientDetail d;
+  d.id = num(j, "id");
+  d.loaded = d.id > 0;
+  if (auto p = j.find("departmentPartners"); p && p->isArr())
+    for (auto& x : p->a) d.lines.push_back({num(x, "department_id"), wstr(x, "department_name")});
+  auto numOr = [](const Json& o, std::string_view override_, std::string_view fallback, int none) {
+    if (auto v = o.find(override_); v && v->t == Json::T::Num) return (int)v->n;
+    if (auto v = o.find(fallback); v && v->t == Json::T::Num) return (int)v->n;
+    return none;
+  };
+  if (auto obs = j.find("obligations"); obs && obs->isArr())
+    for (auto& o : obs->a) {
+      if (!o.flag("is_active", true)) continue;
+      ClientObligation c;
+      c.departmentId = num(o, "department_id");
+      c.cycle = numOr(o, "cycle_months_override", "default_cycle_months", 1);
+      c.dueDay = numOr(o, "due_day_override", "default_due_day", 0);
+      c.dueMonth = numOr(o, "anchor_month", "default_due_month", 0);
+      c.lead = num(o, "effective_lead_days");
+      c.normSeconds = numOr(o, "norm_seconds", "obligation_norm_seconds", -1);
+      c.applicable = o.flag("is_applicable", false);
+      c.approval = o.flag("requires_approval", false);
+      c.monthly = o.str("nomenclature_kind") == "monthly";
+      c.code = wstr(o, "code");
+      c.name = wstr(o, "obligation_name");
+      c.hint = wstr(o, "obligation_hint");
+      c.assignee = wstr(o, "assigned_user_name");
+      d.obligations.push_back(std::move(c));
+    }
+  return d;
+}
+
 Me parseMe(const Json& j) {
   Me m;
   m.loaded = j.isObj();
@@ -213,6 +246,8 @@ SumCard parseCard(const Json& c) {
   k.lane = wstr(c, "lane");
   k.worker = wstr(c, "worker");
   k.notYetVisible = c.flag("notYetVisible", false);
+  k.startDate = wstr(c, "startDate");
+  k.closedAt = wstr(c, "closedAt");
   k.visibleFrom = wstr(c, "visibleFrom");
   if (auto b = c.find("band"); b && b->isObj())
     if (auto h = b->find("color"); h && h->t == Json::T::Str) {
@@ -221,6 +256,44 @@ SumCard parseCard(const Json& c) {
       k.bandLabel = wstr(*b, "label");
     }
   return k;
+}
+
+namespace {
+AuditAgg parseAgg(const Json* a) {
+  AuditAgg g;
+  if (!a || !a->isObj()) return g;
+  g.start = a->str("start");
+  g.end = a->str("end");
+  g.lastClosed = a->str("lastClosed");
+  g.total = num(*a, "total");
+  g.done = num(*a, "done");
+  g.late = a->flag("late", false);
+  return g;
+}
+}  // namespace
+
+AuditTimeline parseAudit(const Json& j) {
+  AuditTimeline t;
+  t.today = j.str("today");
+  t.loaded = !t.today.empty();
+  if (auto ps = j.find("projects"); ps && ps->isArr())
+    for (auto& p : ps->a) {
+      AuditProject ap;
+      ap.id = num(p, "id");
+      ap.name = wstr(p, "name");
+      ap.agg = parseAgg(p.find("agg"));
+      if (auto ts = p.find("tasks"); ts && ts->isArr())
+        for (auto& x : ts->a) {
+          AuditTask at;
+          at.title = wstr(x, "title");
+          at.agg = parseAgg(x.find("agg"));
+          if (auto cs = x.find("cards"); cs && cs->isArr())
+            for (auto& c : cs->a) at.cards.push_back(parseCard(c));
+          ap.tasks.push_back(std::move(at));
+        }
+      t.projects.push_back(std::move(ap));
+    }
+  return t;
 }
 
 Calendar parseCalendar(const Json& j) {
@@ -242,6 +315,7 @@ Summary parseSummary(const Json& j) {
   if (!sv || !sv->isObj()) return s;
   s.loaded = true;
   s.subviewId = sv->str("id");
+  s.hasAuditCards = j.flag("hasAuditCards", false);
   s.table = sv->str("table");
   s.subviewLabel = wstr(*sv, "label");
   s.nameHead = wstr(j, "nameHead");

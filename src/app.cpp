@@ -149,14 +149,14 @@ int App::run(HINSTANCE inst) {
   struct Frames {
     App& a;
     void collect(HANDLE* w, DWORD& n, DWORD& t) {
-      for (UiWindow* win : {(UiWindow*)a.panel_.get(), (UiWindow*)a.login_.get()}) {
+      for (UiWindow* win : {(UiWindow*)a.panel_.get(), (UiWindow*)a.rail_.get(), (UiWindow*)a.login_.get()}) {
         if (!win || !win->wantsFrame()) continue;
         if (win->frameHandle()) w[n++] = win->frameHandle();
         else t = 8;
       }
     }
     void draw() {
-      for (UiWindow* win : {(UiWindow*)a.panel_.get(), (UiWindow*)a.login_.get()})
+      for (UiWindow* win : {(UiWindow*)a.panel_.get(), (UiWindow*)a.rail_.get(), (UiWindow*)a.login_.get()})
         if (win && win->wantsFrame()) win->frame();
     }
   };
@@ -285,6 +285,9 @@ void App::command(const std::wstring& c) {
       Panel shot;
       shot.select(parts.size() > 1 ? narrow(parts[1]) : "", parts.size() > 2 ? narrow(parts[2]) : "");
       shot.selectDay(parts.size() > 1 ? narrow(parts[1]) : "");  // on the calendar: a day (YYYY-MM-DD), „outside“, „undated“
+      if (tab == Tab::Clients && parts.size() > 1) shot.selectClient(_wtoi(parts[1].c_str()));  // on Клиенти: a client id
+      if (tab == Tab::Audit && parts.size() > 1)  // on Одитен график: the depth opened, a card chosen
+        shot.auditView(_wtoi(parts[1].c_str()), parts.size() > 2 ? _wtoi(parts[2].c_str()) : 0);
       float s = 1;
       RECT at = panelRect(s);  // the real panel's size on this screen, in DIPs
       int w = (int)((at.right - at.left) / s), h = (int)((at.bottom - at.top) / s);
@@ -302,7 +305,9 @@ void App::command(const std::wstring& c) {
   } else if (c.rfind(L"tab:", 0) == 0) {  // tab:table|clients|day|profile — what a tab on the rail does
     std::wstring t = c.substr(4);
     setTab(t == L"calendar" ? Tab::Calendar : t == L"clients" ? Tab::Clients : t == L"day" ? Tab::AdminDay
-           : t == L"profile" ? Tab::Profile : Tab::Table);
+           : t == L"audit" ? Tab::Audit : t == L"profile" ? Tab::Profile : Tab::Table);
+  } else if (c.rfind(L"client:", 0) == 0) {  // client:<id> — what choosing a client asks for (checks)
+    loadClient(_wtoi(c.substr(7).c_str()));
   } else if (c.rfind(L"calmonth:", 0) == 0) {  // calmonth:<YYYY-MM> — the calendar's ‹ ›
     std::string ym = narrow(c.substr(9));
     if (ym.size() >= 7) loadCalendar(atoi(ym.substr(0, 4).c_str()), atoi(ym.substr(5, 2).c_str()));
@@ -453,8 +458,10 @@ void App::signOut() {
   pendingNeeds.clear();
   day = {};
   cal = {};
+  audit = {};
   clients.clear();
   clientsLoaded = false;
+  clientDetail = {};
   me = {};
   tab = Tab::Table;
   error.clear();
@@ -482,8 +489,10 @@ void App::sessionLost() {
   pendingNeeds.clear();
   day = {};
   cal = {};
+  audit = {};
   clients.clear();
   clientsLoaded = false;
+  clientDetail = {};
   me = {};
   tab = Tab::Table;
   stateSeq_++;
@@ -592,6 +601,7 @@ void App::moveCard(int cardId, const std::string& lane, const std::wstring& refe
     }
     refreshSummary();
     if (tab == Tab::Calendar) loadCalendar(cal.year, cal.month);  // the move shows there too
+    if (tab == Tab::Audit) loadAudit();
     if (panel_) panel_->invalidate();
   });
 }
@@ -620,9 +630,18 @@ void App::chooseSubview(const std::string& id) {
   if (panel_) panel_->invalidate();
 }
 
+bool App::tabAllowed(Tab t) const {
+  if (t == Tab::AdminDay) return !haveState || st.canTrack;  // until the state comes, as before
+  // The audit timeline only for whom the browser offers it: the person has audit project cards (admins, audit staff).
+  if (t == Tab::Audit) return summary.hasAuditCards;
+  return true;
+}
+
 void App::setTab(Tab t) {
+  if (!tabAllowed(t)) t = Tab::Table;
   tab = t;
   if (t == Tab::Calendar) loadCalendar(cal.year, cal.month);
+  if (t == Tab::Audit) loadAudit();
   if (t == Tab::Clients && !clientsBusy) loadClients();
   if (t == Tab::AdminDay) loadDay(day.date);
   if (t == Tab::Profile) loadMe();
@@ -653,6 +672,24 @@ void App::loadCalendar(int year, int month) {
     }
     if (r.ok()) cal = parseCalendar(r.json);
     else calError = r.status == 404 ? L"Сървърът още няма календара за настолното приложение — нужна е по-нова версия на сървъра." : r.error;
+    if (panel_) panel_->invalidate();
+  });
+}
+
+void App::loadAudit() {
+  if (!signedIn || auditBusy) return;
+  std::string url = "/api/desktop/audit";
+  if (!subviewChoice.empty()) url += "?subview=" + subviewChoice;
+  auditBusy = true;
+  auditError.clear();
+  api.send(L"GET", url, nullptr, [this](const Reply& r) {
+    auditBusy = false;
+    if (r.status == 401) {
+      sessionLost();
+      return;
+    }
+    if (r.ok()) audit = parseAudit(r.json);
+    else auditError = r.status == 404 ? L"Сървърът още няма одитния график за настолното приложение — нужна е по-нова версия на сървъра." : r.error;
     if (panel_) panel_->invalidate();
   });
 }
@@ -728,6 +765,23 @@ void App::loadClients() {
     } else {
       clientsError = r.error;
     }
+    if (panel_) panel_->invalidate();
+  });
+}
+
+void App::loadClient(int id) {
+  if (!signedIn || id <= 0) return;
+  clientBusy = true;
+  clientError.clear();
+  if (clientDetail.id != id) clientDetail = {};
+  api.send(L"GET", "/api/clients/" + std::to_string(id), nullptr, [this, id](const Reply& r) {
+    clientBusy = false;
+    if (r.status == 401) {
+      sessionLost();
+      return;
+    }
+    if (r.ok()) clientDetail = parseClientDetail(r.json);
+    else clientError = r.error;  // 403: „Нямате достъп до този клиент.“ — the server's rule, not ours
     if (panel_) panel_->invalidate();
   });
 }
@@ -828,6 +882,7 @@ void App::refreshSummary() {
     if (r.ok()) {
       summary = parseSummary(r.json);
       summaryError.clear();
+      if (rail_) rail_->invalidate();  // whether the audit timeline is offered
     } else if (r.status == 404) {
       summaryError = L"Сървърът още няма таблицата за настолното приложение — нужна е по-нова версия на сървъра.";
     } else {

@@ -4,6 +4,7 @@
 #include "ui.h"
 
 #include <map>
+#include <set>
 
 namespace kd {
 
@@ -14,6 +15,11 @@ class Panel : public rt::UiWindow {
   // What a click on a row (column empty) or on a number does — also `--select row:column` from the command line.
   void select(const std::string& row, const std::string& col);
   void selectDay(const std::string& day) { calSel_ = day; }  // the calendar's day / bucket — also `--shot` for checks
+  void selectClient(int id) { selClient_ = id; }  // --shot on the Клиенти tab
+  void auditView(int depth, int card) {  // --shot on the Одитен график tab: how far opened, which card chosen
+    auditDepthWanted_ = depth;
+    auditCard_ = card;
+  }
 
  protected:
   void paint() override;
@@ -28,6 +34,7 @@ class Panel : public rt::UiWindow {
   void paintCards(rt::RectF r, const std::vector<const SumCard*>& cards, uint32_t scrollId);
   rt::Color statusColorOf(const std::string& key);  // the urgency band's colour
   void paintCalendar(rt::RectF area);
+  void paintAudit(rt::RectF area);
   void paintClients(rt::RectF area);
   void paintAdminDay(rt::RectF area);
   void paintProfile(rt::RectF area);
@@ -43,8 +50,16 @@ class Panel : public rt::UiWindow {
   std::map<int, AttachNeeds> pendingForm_;  // stopped entry id → its ✓ form
   std::map<int, AttachNeeds> attachForm_;  // card id → the attach form (the choice, Дейност, Коментар), seeded from the server
   std::string calSel_;        // Календар: the chosen day (YYYY-MM-DD), or „outside“ / „undated“
+  // Одитен график: the scale (0 own period, 1 year, 2 quarter, 3 month), its anchor month, the own period's months
+  // back / ahead, the opened projects („p:<id>“) and tasks („t:<id>:<title>“), the chosen card (shown under the chart)
+  int auditLevel_ = 1, auditY_ = 0, auditM_ = 0, auditBack_ = 1, auditAhead_ = 6, auditCard_ = 0;
+  std::set<std::wstring> auditOpen_;
+  int auditDepthWanted_ = -1;
   std::wstring clientQuery_;  // Клиенти: the search
-  int selClient_ = 0;         // Клиенти: the chosen one (its cards under it)
+  int selClient_ = 0;         // Клиенти: the chosen one (its nomenclature / cards under it)
+  int clientPane_ = 0;        // 0 — „Номенклатура“, 1 — „Отворени карти“
+  int clientAsked_ = 0;       // the client whose nomenclature was asked for (once per choice)
+  void paintClientNomenclature(rt::RectF r);
   int dayFormSeq_ = -1;       // Админ. дейности: which answer of the server the form was filled from
   std::map<int, std::wstring> dayInput_, dayNoteIn_;  // activity id → the typed time / comment
   std::map<int, std::wstring> refInput_;  // „№ вх. док.“ typed under a card the server would not close without one

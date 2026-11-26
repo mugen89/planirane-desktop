@@ -113,6 +113,7 @@ void Panel::paint() {
   ui.text(RectF(x, y, x + cw - 120, y + 22), L"Контрол на срокове", 15, P.text, 600);
   std::wstring who = a.user.name.empty() ? a.user.username : a.user.name;
   std::wstring where = a.tab == App::Tab::Calendar   ? L"Календар"
+                      : a.tab == App::Tab::Audit    ? L"Одитен график"
                       : a.tab == App::Tab::Clients  ? L"Клиенти"
                       : a.tab == App::Tab::AdminDay ? L"Административни дейности"
                       : a.tab == App::Tab::Profile  ? L"Профил и настройки"
@@ -136,8 +137,10 @@ void Panel::paint() {
   y = paintTimer(RectF(x, y, x + cw, y + 64));
   y = paintUnassigned(RectF(x, y, x + cw, H));
   RectF content(x, y + 10, x + cw, H - 46);
+  if (!a.tabAllowed(a.tab)) a.tab = App::Tab::Table;  // e.g. the right to track time was taken away
   switch (a.tab) {
     case App::Tab::Calendar: paintCalendar(content); break;
+    case App::Tab::Audit: paintAudit(content); break;
     case App::Tab::Clients: paintClients(content); break;
     case App::Tab::AdminDay: paintAdminDay(content); break;
     case App::Tab::Profile: paintProfile(content); break;
@@ -795,16 +798,19 @@ void Rail::paint() {
     const wchar_t* icon;
     const wchar_t* label;
   };
+  // The user's order (2026-11-26): the table first, administrative time second, clients third, Профил always last.
   static const Item kItems[] = {
       {App::Tab::Table, L"\xE8FD", L"Таблица"},
-      {App::Tab::Calendar, L"\xE787", L"Календар"},
-      {App::Tab::Clients, L"\xE716", L"Клиенти"},
       {App::Tab::AdminDay, L"\xE823", L"Админ. дейности"},
+      {App::Tab::Clients, L"\xE716", L"Клиенти"},
+      {App::Tab::Calendar, L"\xE787", L"Календар"},
+      {App::Tab::Audit, L"\xE9D2", L"Одитен график"},
       {App::Tab::Profile, L"\xE77B", L"Профил"},
   };
   float y = 12;
   int i = 0;
   for (auto& it : kItems) {
+    if (!a.tabAllowed(it.tab)) continue;
     RectF b(6, y, W - 6, y + 72);
     bool on = a.tab == it.tab;
     bool hot = ui.hot(b);

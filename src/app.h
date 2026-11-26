@@ -73,9 +73,12 @@ class App {
   void chooseSubview(const std::string& id);
 
   // The tabs on the rail left of the panel (the user's sketch, 2026-11-26).
-  enum class Tab { Table, Calendar, Clients, AdminDay, Profile };
+  enum class Tab { Table, Calendar, Clients, AdminDay, Audit, Profile };
   Tab tab = Tab::Table;
   void setTab(Tab t);
+  // Only the tabs the person may use — the same rules as the browser and the server: Админ. дейности needs the right
+  // to track time (GET /time/day answers 403 without it).
+  bool tabAllowed(Tab t) const;
   // „Административни дейности“: one day, as GET /time/day gives it; saved with POST /time/day (only the rows sent).
   struct DayRowIn {
     int activityId = 0;
@@ -94,11 +97,20 @@ class App {
   std::wstring calError;
   void loadCalendar(int year = 0, int month = 0);  // 0: the month on screen (or this one)
   double calAt_ = 0;
+  // Одитен график
+  AuditTimeline audit;
+  bool auditBusy = false;
+  std::wstring auditError;
+  void loadAudit();
   // Клиенти
   std::vector<ClientRow> clients;
   bool clientsLoaded = false, clientsBusy = false;
   std::wstring clientsError;
   void loadClients();
+  ClientDetail clientDetail;
+  bool clientBusy = false;
+  std::wstring clientError;
+  void loadClient(int id);
   // Профил
   Me me;
   void loadMe();

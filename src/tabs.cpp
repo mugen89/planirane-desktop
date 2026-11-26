@@ -82,6 +82,40 @@ int daysInMonth(int y, int m) {
   if (m == 2) return (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) ? 29 : 28;
   return k[(m + 11) % 12];
 }
+// civil date <-> day number (Howard Hinnant's algorithms) — the audit timeline's arithmetic
+int dayNo(int y, int m, int d) {
+  y -= m <= 2;
+  const int era = (y >= 0 ? y : y - 399) / 400;
+  const unsigned yoe = (unsigned)(y - era * 400);
+  const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  return era * 146097 + (int)doe - 719468;
+}
+int dayNoIso(const std::wstring& iso) {
+  if (iso.size() < 10) return 0;
+  return dayNo(_wtoi(iso.substr(0, 4).c_str()), _wtoi(iso.substr(5, 2).c_str()), _wtoi(iso.substr(8, 2).c_str()));
+}
+int dayNoIso(const std::string& iso) { return dayNoIso(widen(iso)); }
+void civilOf(int z, int& y, int& m, int& d) {
+  z += 719468;
+  const int era = (z >= 0 ? z : z - 146096) / 146097;
+  const unsigned doe = (unsigned)(z - era * 146097);
+  const unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  y = (int)yoe + era * 400;
+  const unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  const unsigned mp = (5 * doy + 2) / 153;
+  d = (int)(doy - (153 * mp + 2) / 5 + 1);
+  m = (int)(mp < 10 ? mp + 3 : mp - 9);
+  y += m <= 2;
+}
+int mon0Of(int z) { return ((z % 7) + 7 + 3) % 7; }  // Monday = 0 (day 0, 1970-01-01, was a Thursday)
+std::wstring dmyOf(int z) {
+  int y, m, d;
+  civilOf(z, y, m, d);
+  wchar_t b[16];
+  swprintf(b, 16, L"%02d.%02d.%04d", d, m, y);
+  return b;
+}
 std::wstring selfExe() {
   wchar_t p[MAX_PATH];
   DWORD n = GetModuleFileNameW(nullptr, p, MAX_PATH);
@@ -259,6 +293,367 @@ void Panel::paintCalendar(RectF area) {
   paintCards(RectF(area.l, y + 34, area.r, area.b), selCards, ui.id("calcards"));
 }
 
+// ================================================================ Одитен график
+// GET /desktop/audit — as „Одитен график“ in the browser (AuditGantt.tsx): projects, their tasks, their cards on a time
+// axis (year · quarter · month · own period); a project's / task's bar runs from its first start to its last deadline,
+// filled by the share closed, red when something is overdue, hatched past the planned end, ✔ at the last closing.
+void Panel::paintAudit(RectF area) {
+  App& a = app();
+  const UiPalette& P = ui.pal;
+  const AuditTimeline& t = a.audit;
+  const Color green = Color::hex(0x2ECC71), red = P.dark ? Color::hex(0xF87171) : Color::hex(0xD33333);
+  static const wchar_t* kMonShort[] = {L"", L"яну", L"фев", L"мар", L"апр", L"май", L"юни", L"юли", L"авг", L"сеп", L"окт", L"ное", L"дек"};
+  static const wchar_t* kMonths[] = {L"", L"януари", L"февруари", L"март", L"април", L"май", L"юни",
+                                     L"юли", L"август", L"септември", L"октомври", L"ноември", L"декември"};
+  std::string today = t.loaded ? t.today : todayIso();
+  int ty = atoi(today.substr(0, 4).c_str()), tm = atoi(today.substr(5, 2).c_str());
+  if (auditY_ == 0) {
+    auditY_ = ty;
+    auditM_ = tm;
+  }
+  auto split = [](int idx, int& y, int& m) {  // idx = y*12 + (m-1)
+    y = idx >= 0 ? idx / 12 : -((-idx + 11) / 12);
+    m = idx - y * 12 + 1;
+  };
+  // the span on screen
+  int fromNo = 0, toNo = 0;
+  int q0 = (auditM_ - 1) / 3 * 3 + 1;
+  if (auditLevel_ == 0) {
+    int idx = auditY_ * 12 + auditM_ - 1, ya, ma, yb, mb;
+    split(idx - auditBack_, ya, ma);
+    split(idx + auditAhead_, yb, mb);
+    fromNo = dayNo(ya, ma, 1);
+    toNo = dayNo(yb, mb, daysInMonth(yb, mb));
+  } else if (auditLevel_ == 1) {
+    fromNo = dayNo(auditY_, 1, 1);
+    toNo = dayNo(auditY_, 12, 31);
+  } else if (auditLevel_ == 2) {
+    fromNo = dayNo(auditY_, q0, 1);
+    toNo = dayNo(auditY_, q0 + 2, daysInMonth(auditY_, q0 + 2));
+  } else {
+    fromNo = dayNo(auditY_, auditM_, 1);
+    toNo = dayNo(auditY_, auditM_, daysInMonth(auditY_, auditM_));
+  }
+  const int total = toNo - fromNo + 1;
+
+  // ---- title and navigation
+  float y = area.t;
+  ui.text(RectF(area.l + 4, y, area.l + 300, y + 30), L"Одитен график", 16.f, P.text, 700);
+  std::wstring label;
+  if (auditLevel_ == 0) label = dmyOf(fromNo).substr(3) + L" – " + dmyOf(toNo).substr(3);
+  else if (auditLevel_ == 1) label = num(auditY_);
+  else if (auditLevel_ == 2) label = num((auditM_ - 1) / 3 + 1) + L"-во тримесечие " + num(auditY_);
+  else label = std::wstring(kMonths[auditM_]) + L" " + num(auditY_);
+  int months = auditLevel_ == 1 ? 12 : auditLevel_ == 2 ? 3 : 1;
+  RectF prev(area.r - 316, y + 1, area.r - 280, y + 29), lab(area.r - 276, y, area.r - 76, y + 30), next(area.r - 72, y + 1, area.r - 36, y + 29);
+  if (ui.iconButton(ui.id("aprev"), prev, kPrev, L"Назад")) split(auditY_ * 12 + auditM_ - 1 - months, auditY_, auditM_);
+  ui.text(lab, label, 13.f, P.text, 600, Align::Center);
+  if (ui.iconButton(ui.id("anext"), next, kNext, L"Напред")) split(auditY_ * 12 + auditM_ - 1 + months, auditY_, auditM_);
+  if (ui.link(ui.id("atoday"), RectF(area.r - 32, y, area.r, y + 30), L"днес", 12.f)) {
+    auditY_ = ty;
+    auditM_ = tm;
+  }
+  y += 38;
+
+  // ---- the scale, the own period, the depth
+  int lvl = auditLevel_ == 0 ? 3 : auditLevel_ - 1;
+  std::vector<std::wstring> lv = {L"Година", L"Тримесечие", L"Месец", L"⇆ Свой период"};
+  if (ui.segmented(ui.id("alevel"), RectF(area.l, y, area.l + 430, y + 30), lvl, lv)) auditLevel_ = lvl == 3 ? 0 : lvl + 1;
+  float x = area.l + 442;
+  if (auditLevel_ == 0) {  // months back / ahead from the anchor month
+    auto stepper = [&](uint32_t id, int& v, const wchar_t* what) {
+      if (ui.iconButton(id, RectF(x, y + 1, x + 26, y + 29), L"\xE738", L"По-малко") && v > 0) v--;
+      ui.text(RectF(x + 28, y, x + 52, y + 30), num(v), 12.5f, P.text, 600, Align::Center);
+      if (ui.iconButton(id + 1, RectF(x + 54, y + 1, x + 80, y + 29), L"\xE710", L"Повече") && v < 36) v++;
+      ui.text(RectF(x + 84, y, x + 160, y + 30), what, 11.5f, P.dim);
+      x += 164;
+    };
+    stepper(ui.id("aback"), auditBack_, L"мес. назад");
+    stepper(ui.id("aahead"), auditAhead_, L"мес. напред");
+  }
+  // all project and task keys, for ＋ / － ниво and „Разгъни всичко“
+  std::vector<std::wstring> pkeys, tkeys;
+  for (auto& pr : t.projects) {
+    pkeys.push_back(L"p:" + num(pr.id));
+    for (auto& tk : pr.tasks) tkeys.push_back(L"t:" + num(pr.id) + L":" + tk.title);
+  }
+  int depth = std::any_of(auditOpen_.begin(), auditOpen_.end(), [](const std::wstring& k) { return k.rfind(L"t:", 0) == 0; }) ? 2
+              : auditOpen_.empty()                                                                                       ? 0
+                                                                                                                         : 1;
+  auto openTo = [&](int d) {
+    auditOpen_.clear();
+    if (d >= 1) auditOpen_.insert(pkeys.begin(), pkeys.end());
+    if (d >= 2) auditOpen_.insert(tkeys.begin(), tkeys.end());
+  };
+  if (auditDepthWanted_ >= 0 && !pkeys.empty()) {
+    openTo(auditDepthWanted_);
+    auditDepthWanted_ = -1;
+  }
+  float bx = area.r;
+  auto small = [&](uint32_t id, const wchar_t* text, float w, bool enabled) {
+    RectF b(bx - w, y, bx, y + 30);
+    bx -= w + 6;
+    return ui.button(id, b, text, Btn::Subtle, nullptr, enabled);
+  };
+  if (small(ui.id("acollapse"), L"Свий", 64, !auditOpen_.empty())) auditOpen_.clear();
+  if (small(ui.id("aexpand"), L"Разгъни всичко", 132, depth < 2)) openTo(2);
+  if (small(ui.id("aless"), L"－ ниво", 80, depth > 0)) openTo(depth - 1);
+  if (small(ui.id("amore"), L"＋ ниво", 80, depth < 2)) openTo(depth + 1);
+  y += 40;
+  if (!t.loaded) {
+    bool err = !a.auditError.empty();
+    ui.text(RectF(area.l + 4, y, area.r, y + 40), err ? a.auditError : L"Зарежда графика…", 12.5f, err ? P.danger : P.dim, 400, Align::Left,
+            VAlign::Top, true);
+    return;
+  }
+  if (t.projects.empty()) {
+    ui.text(RectF(area.l + 4, y, area.r, y + 40), L"Няма одитни проекти в този изглед.", 12.5f, P.dim);
+    return;
+  }
+
+  // ---- the rows: projects, their tasks when open, their cards when open
+  struct Row {
+    int depth;
+    const AuditProject* pr;
+    const AuditTask* tk;
+    const SumCard* card;
+    std::wstring key;
+  };
+  std::vector<Row> rows;
+  const SumCard* chosen = nullptr;
+  for (auto& pr : t.projects) {
+    std::wstring pk = L"p:" + num(pr.id);
+    rows.push_back({0, &pr, nullptr, nullptr, pk});
+    for (auto& tk : pr.tasks)
+      for (auto& c : tk.cards)
+        if (c.id == auditCard_) chosen = &c;
+    if (!auditOpen_.count(pk)) continue;
+    for (auto& tk : pr.tasks) {
+      std::wstring tkk = L"t:" + num(pr.id) + L":" + tk.title;
+      rows.push_back({1, &pr, &tk, nullptr, tkk});
+      if (!auditOpen_.count(tkk)) continue;
+      for (auto& c : tk.cards) rows.push_back({2, &pr, &tk, &c, L"c:" + num(c.id)});
+    }
+  }
+  if (!chosen) auditCard_ = 0;
+
+  // ---- the axis
+  const float LABEL_W = 270, ROW_H = 28;
+  float chartL = area.l + LABEL_W, chartR = area.r;
+  auto xOf = [&](int no) { return chartL + (chartR - chartL) * float(no - fromNo) / float(total); };
+  struct Seg {
+    std::wstring label;
+    int from, to;
+    bool weekend;
+    int level, y, m;  // a click drills there (level 0: no)
+  };
+  std::vector<Seg> top, bottom;
+  if (auditLevel_ == 0) {
+    int y0, m0, d0, y1, m1, d1;
+    civilOf(fromNo, y0, m0, d0);
+    civilOf(toNo, y1, m1, d1);
+    for (int yy = y0; yy <= y1; yy++)
+      top.push_back({num(yy), std::max(fromNo, dayNo(yy, 1, 1)), std::min(toNo, dayNo(yy, 12, 31)), false, 0, 0, 0});
+    for (int idx = y0 * 12 + m0 - 1; idx <= y1 * 12 + m1 - 1; idx++) {
+      int yy, mm;
+      split(idx, yy, mm);
+      bottom.push_back({kMonShort[mm], dayNo(yy, mm, 1), dayNo(yy, mm, daysInMonth(yy, mm)), false, 3, yy, mm});
+    }
+  } else if (auditLevel_ == 1) {
+    for (int q = 0; q < 4; q++)
+      top.push_back({num(q + 1) + L"-во трим.", dayNo(auditY_, q * 3 + 1, 1), dayNo(auditY_, q * 3 + 3, daysInMonth(auditY_, q * 3 + 3)), false, 2,
+                     auditY_, q * 3 + 1});
+    for (int m = 1; m <= 12; m++) bottom.push_back({kMonShort[m], dayNo(auditY_, m, 1), dayNo(auditY_, m, daysInMonth(auditY_, m)), false, 3, auditY_, m});
+  } else if (auditLevel_ == 2) {
+    for (int m = q0; m < q0 + 3; m++)
+      top.push_back({std::wstring(kMonths[m]) + L" " + num(auditY_), dayNo(auditY_, m, 1), dayNo(auditY_, m, daysInMonth(auditY_, m)), false, 3, auditY_, m});
+    for (int d = fromNo; d <= toNo;) {
+      int end = std::min(toNo, d + 6 - mon0Of(d));
+      int yy, mm, dd;
+      civilOf(d, yy, mm, dd);
+      wchar_t b[16];
+      swprintf(b, 16, L"%02d.%02d", dd, mm);
+      bottom.push_back({b, d, end, false, 0, 0, 0});
+      d = end + 1;
+    }
+  } else {
+    top.push_back({std::wstring(kMonths[auditM_]) + L" " + num(auditY_), fromNo, toNo, false, 0, 0, 0});
+    for (int d = fromNo; d <= toNo; d++) {
+      int yy, mm, dd;
+      civilOf(d, yy, mm, dd);
+      bottom.push_back({num(dd), d, d, mon0Of(d) >= 5, 0, 0, 0});
+    }
+  }
+  auto axisRow = [&](const std::vector<Seg>& segs, float yy, const char* idBase) {
+    int i = 0;
+    for (auto& g : segs) {
+      RectF r(xOf(g.from), yy, xOf(g.to + 1), yy + 20);
+      ui.p->rrect(RectF(r.l, r.t, r.l + 1, r.b), 0, P.stroke);
+      bool can = g.level != 0, hot = can && ui.hot(r);
+      if (hot) ui.p->rrect(r, 3, P.text.withA(0.06f));
+      ui.text(r, g.label, 11.f, P.dim, 600, Align::Center);
+      if (hot) ui.cursor = LoadCursorW(nullptr, IDC_HAND);
+      if (can && ui.press(ui.id(idBase, i), r)) {
+        auditLevel_ = g.level;
+        auditY_ = g.y;
+        auditM_ = g.m;
+      }
+      i++;
+    }
+  };
+  axisRow(top, y, "atop");
+  axisRow(bottom, y + 20, "abot");
+  y += 44;
+  ui.divider(RectF(area.l, y - 1, area.r, y));
+
+  // ---- the body; with a card chosen, the chart keeps the upper part and the card is listed under it
+  float chartB = chosen ? std::max(y + 180.f, area.b - 140.f) : area.b;
+  RectF bodyR(area.l, y, area.r, chartB);
+  for (auto& g : bottom) {  // the grid and the weekends, under the rows
+    float gx = xOf(g.from);
+    if (g.weekend) ui.p->rrect(RectF(gx, bodyR.t, xOf(g.to + 1), bodyR.b), 0, P.text.withA(0.04f));
+    ui.p->rrect(RectF(gx, bodyR.t, gx + 1, bodyR.b), 0, P.stroke.alpha(0.6f));
+  }
+  int todayNo = dayNoIso(today);
+  float off = ui.beginScroll(ui.id("arows"), bodyR, rows.size() * ROW_H);
+  auto clamp = [&](int s0, int e0, float& l, float& r, bool& clipL, bool& clipR) {
+    if (e0 < fromNo || s0 > toNo) return false;
+    clipL = s0 < fromNo;
+    clipR = e0 > toNo;
+    l = xOf(std::max(s0, fromNo));
+    r = std::max(l + 3.f, xOf(std::min(e0, toNo) + 1));
+    return true;
+  };
+  for (size_t i = 0; i < rows.size(); i++) {
+    const Row& row = rows[i];
+    RectF rr(area.l, bodyR.t + off + i * ROW_H, area.r, bodyR.t + off + (i + 1) * ROW_H);
+    if (rr.b < bodyR.t || rr.t > bodyR.b) continue;
+    ui.p->rrect(RectF(rr.l, rr.b - 1, rr.r, rr.b), 0, P.stroke.alpha(0.5f));
+    // the label
+    RectF lr(rr.l + 6 + row.depth * 16, rr.t, chartL - 6, rr.b);
+    bool isAgg = row.card == nullptr;
+    const AuditAgg* agg = isAgg ? (row.tk ? &row.tk->agg : &row.pr->agg) : nullptr;
+    std::wstring text = row.card ? row.card->title : row.tk ? row.tk->title : row.pr->name;
+    bool on = isAgg && auditOpen_.count(row.key);
+    if (isAgg) ui.glyph(RectF(lr.l, rr.t, lr.l + 14, rr.b), on ? L"\xE70D" : L"\xE76C", 9.f, P.dim);
+    RectF tr(lr.l + (isAgg ? 16 : 0), rr.t, lr.r, rr.b);
+    ui.text(tr, text + (isAgg ? L"  · " + num(agg->done) + L"/" + num(agg->total) : L""), 12.f,
+            row.card && row.card->id == auditCard_ ? P.accent : P.text, row.depth == 0 ? 600 : 400);
+    ui.tooltip(lr, text);
+    bool hot = ui.hot(lr);
+    if (hot) ui.cursor = LoadCursorW(nullptr, IDC_HAND);
+    bool clicked = ui.press(ui.id("alabel", (int)i), lr);
+    // the bar
+    float bl, br;
+    bool cl, cr;
+    if (isAgg) {
+      int s0 = dayNoIso(agg->start), e0 = dayNoIso(agg->end);
+      bool late = agg->late;
+      Color edge = late ? red : P.accent;
+      if (clamp(s0, e0, bl, br, cl, cr)) {
+        RectF b(bl, rr.t + 6, br, rr.t + 22);
+        ui.p->rrect(b, 4, P.text.withA(0.10f));
+        float share = agg->total ? float(agg->done) / float(agg->total) : 0.f;
+        if (share > 0) ui.p->rrect(RectF(b.l, b.t, b.l + b.w() * share, b.b), 4, edge.alpha(0.75f));
+        ui.p->rrectStroke(b.inset(0.5f), 4, edge, 1.f);
+        std::wstring tip = text + L"\
+" + dmyOf(s0) + L" → " + dmyOf(e0) + L"\
+приключени " + num(agg->done) + L" от " + num(agg->total);
+        if (!agg->lastClosed.empty()) tip += L"\
+последно приключване " + dmyOf(dayNoIso(agg->lastClosed));
+        if (late) tip += L"\
+⚠ има просрочени карти";
+        ui.tooltip(b, tip);
+        if (ui.hot(b)) ui.cursor = LoadCursorW(nullptr, IDC_HAND);
+        if (ui.press(ui.id("abar", (int)i), b)) clicked = true;
+      }
+      if (!agg->lastClosed.empty()) {  // past the planned end: hatched red; ✔ at the last closing
+        int lc = dayNoIso(agg->lastClosed);
+        int lateD = lc - e0;
+        float ol, orr;
+        bool ocl, ocr;
+        if (lateD > 0 && clamp(e0 + 1, lc, ol, orr, ocl, ocr)) {
+          RectF ob(ol, rr.t + 6, orr, rr.t + 22);
+          ui.p->rrect(ob, 3, red.alpha(0.30f));
+          ui.p->rrectStroke(ob.inset(0.5f), 3, red, 1.f);
+          ui.tooltip(ob, L"Приключване след планирания край: " + dmyOf(e0) + L" → " + dmyOf(lc) + L" (" + num(lateD) + L" дни)");
+        }
+        bool allDone = agg->done == agg->total;
+        if (lc >= fromNo && lc <= toNo && (allDone || lateD > 0)) {
+          float mx = xOf(lc) + (xOf(lc + 1) - xOf(lc)) / 2;
+          Color mc = lateD > 0 ? red : green;
+          ui.p->rrect(RectF(mx - 1, rr.t + 2, mx + 1, rr.b - 2), 0, mc);
+          ui.text(RectF(mx - 8, rr.t - 4, mx + 8, rr.t + 8), L"✔", 8.f, mc, 700, Align::Center);
+        }
+      }
+      if (clicked) {
+        if (on) auditOpen_.erase(row.key);
+        else auditOpen_.insert(row.key);
+      }
+    } else {
+      const SumCard& c = *row.card;
+      int due = c.dueDate.size() >= 10 ? dayNoIso(c.dueDate) : 0;
+      int st0 = c.startDate.size() >= 10 ? dayNoIso(c.startDate) : due ? due : fromNo;
+      int en0 = due ? due : st0;
+      bool fin = c.closed;
+      Color base = c.hasBand ? c.band : P.accent;
+      if (clamp(st0, en0, bl, br, cl, cr)) {
+        RectF b(bl, rr.t + 6, br, rr.t + 22);
+        ui.p->rrect(b, 4, base.alpha(fin ? 0.65f : 1.f));
+        if (cl) ui.text(RectF(b.l + 2, b.t, b.l + 14, b.b), L"◀", 8.f, Color(1, 1, 1), 700);
+        if (cr) ui.text(RectF(b.r - 14, b.t, b.r - 2, b.b), L"▶", 8.f, Color(1, 1, 1), 700, Align::Right);
+        int closedNo = c.closedAt.size() >= 10 ? dayNoIso(c.closedAt) : 0;
+        int lateDays = closedNo && due ? closedNo - due : 0;
+        std::wstring tip = c.title + L"\
+начало " + (c.startDate.size() >= 10 ? dmyOf(st0) : L"—") + L" · срок " + (due ? dmyOf(due) : L"—");
+        if (!c.worker.empty()) tip += L"\
+" + c.worker;
+        if (fin)
+          tip += closedNo ? L"\
+✔ приключена " + dmyOf(closedNo) +
+                                (!due ? L"" : lateDays > 0 ? L" — със закъснение " + num(lateDays) + L" дни"
+                                              : lateDays < 0 ? L" — " + num(-lateDays) + L" дни преди срока"
+                                                             : L" — в срока")
+                          : L"\
+✔ приключена";
+        ui.tooltip(b, tip);
+        if (ui.hot(b)) ui.cursor = LoadCursorW(nullptr, IDC_HAND);
+        if (ui.press(ui.id("acbar", (int)i), b)) clicked = true;
+        float ol, orr;
+        bool ocl, ocr;
+        if (lateDays > 0 && clamp(due + 1, closedNo, ol, orr, ocl, ocr)) {
+          RectF ob(ol, rr.t + 6, orr, rr.t + 22);
+          ui.p->rrect(ob, 3, red.alpha(0.30f));
+          ui.p->rrectStroke(ob.inset(0.5f), 3, red, 1.f);
+        }
+        if (closedNo && closedNo >= fromNo && closedNo <= toNo) {
+          float mx = xOf(closedNo) + (xOf(closedNo + 1) - xOf(closedNo)) / 2;
+          Color mc = lateDays > 0 ? red : green;
+          ui.p->rrect(RectF(mx - 1, rr.t + 2, mx + 1, rr.b - 2), 0, mc);
+          ui.text(RectF(mx - 8, rr.t - 4, mx + 8, rr.t + 8), L"✔", 8.f, mc, 700, Align::Center);
+        }
+      }
+      if (clicked) {
+        auditCard_ = auditCard_ == c.id ? 0 : c.id;
+        ui.scrollTo(ui.id("acards"), 0);
+      }
+    }
+  }
+  ui.endScroll();
+  if (todayNo >= fromNo && todayNo <= toNo) {  // today: a red line over everything
+    float tx = xOf(todayNo) + (xOf(todayNo + 1) - xOf(todayNo)) / 2;
+    ui.p->rrect(RectF(tx - 1, bodyR.t, tx + 1, bodyR.b), 0, red);
+  }
+  if (!chosen) return;
+
+  // ---- the chosen card, with everything a card has in the table
+  float cy = chartB + 6;
+  ui.text(RectF(area.l + 4, cy, area.r - 40, cy + 24), L"Избраната карта", 12.5f, P.text, 600);
+  if (ui.iconButton(ui.id("acl"), RectF(area.r - 32, cy - 2, area.r, cy + 26), kClose, L"Затвори")) auditCard_ = 0;
+  std::vector<const SumCard*> one = {chosen};
+  paintCards(RectF(area.l, cy + 28, area.r, area.b), one, ui.id("acards"));
+}
+
 // ================================================================ Клиенти
 // GET /clients — the browser's list (its visibility, the first business line in scope). A click on a client shows its
 // open cards in the current view of the table, with everything a card has there (lane, start, period).
@@ -349,7 +744,10 @@ void Panel::paintClients(RectF area) {
     if (hot) ui.cursor = LoadCursorW(nullptr, IDC_HAND);
     if (ui.press(ui.id("crow", salt), rr)) {
       selClient_ = isSel ? 0 : c.id;
+      clientPane_ = 0;
+      clientAsked_ = 0;  // its nomenclature is (re)loaded below
       ui.scrollTo(ui.id("ccards"), 0);
+      ui.scrollTo(ui.id("cnom"), 0);
     }
   };
 
@@ -373,13 +771,171 @@ void Panel::paintClients(RectF area) {
   y += rh + 6;
   ui.divider(RectF(area.l, y - 1, area.r, y));
   if (!selClient_) return;  // that click just closed it
+  // Its assigned nomenclature comes from GET /clients/:id — asked once per choice (a refusal must not be asked again).
+  if (clientAsked_ != sel->id) {
+    clientAsked_ = sel->id;
+    int id = sel->id;
+    after([id] { app().loadClient(id); });
+  }
   std::vector<const SumCard*> cards;
   for (auto& k : a.summary.cards)
     if (k.clientId == sel->id && !k.closed) cards.push_back(&k);
-  std::wstring t = L"Отворените карти на клиента в изгледа „" + a.summary.subviewLabel + L"“  —  " + num((int)cards.size());
-  ui.text(RectF(area.l + 4, y + 8, area.r - 40, y + 32), t, 12.5f, P.text, 600);
-  if (ui.iconButton(ui.id("cclose"), RectF(area.r - 32, y + 6, area.r, y + 34), kClose, L"Затвори — всички клиенти")) selClient_ = 0;
-  paintCards(RectF(area.l, y + 38, area.r, area.b), cards, ui.id("ccards"));
+  // Two panes, as the person needs them: what is assigned to the client (as the browser's client screen) — or its cards.
+  int pane = clientPane_;
+  std::vector<std::wstring> panes = {L"Номенклатура", L"Отворени карти (" + num((int)cards.size()) + L")"};
+  if (ui.segmented(ui.id("cpane"), RectF(area.l, y + 8, area.l + 380, y + 38), pane, panes)) clientPane_ = pane;
+  if (ui.iconButton(ui.id("cclose"), RectF(area.r - 32, y + 9, area.r, y + 37), kClose, L"Затвори — всички клиенти")) selClient_ = 0;
+  y += 46;
+  if (clientPane_ == 0) {
+    paintClientNomenclature(RectF(area.l, y, area.r, area.b));
+    return;
+  }
+  std::wstring t = L"Отворените карти на клиента в изгледа „" + a.summary.subviewLabel + L"“";
+  ui.text(RectF(area.l + 4, y, area.r - 40, y + 24), t, 12.5f, P.dim, 600);
+  paintCards(RectF(area.l, y + 28, area.r, area.b), cards, ui.id("ccards"));
+}
+
+// The client's assigned nomenclature, read-only, as the browser's client screen lists it (GET /clients/:id — the server
+// already limits it to the person's business lines): per business line, the deadlines before the monthly services, by
+// code. The value of a column is the client's own setting, else the activity's default — what the browser shows.
+void Panel::paintClientNomenclature(RectF r) {
+  App& a = app();
+  const UiPalette& P = ui.pal;
+  const ClientDetail& d = a.clientDetail;
+  const Color green = P.dark ? Color::hex(0x4ADE80) : Color::hex(0x15803D);
+  const Color amber = P.dark ? Color::hex(0xFBBF24) : Color::hex(0xB45309);
+  if (!d.loaded || d.id != selClient_) {
+    bool err = !a.clientError.empty() && !a.clientBusy;
+    ui.text(RectF(r.l + 4, r.t, r.r, r.t + 40), err ? a.clientError : L"Зарежда номенклатурата…", 12.5f, err ? P.danger : P.dim, 400,
+            Align::Left, VAlign::Top, true);
+    return;
+  }
+  static const wchar_t* kWeekdays[] = {L"", L"пн", L"вт", L"ср", L"чт", L"пт", L"сб", L"нд"};
+  auto cycleText = [](int c) -> std::wstring {
+    switch (c) {
+      case -1: return L"Седмично";
+      case 1: return L"Месечно";
+      case 3: return L"Тримесечно";
+      case 6: return L"Полугодишно";
+      case 12: return L"Годишно";
+      default: return c > 0 ? std::to_wstring(c) + L" мес." : L"—";
+    }
+  };
+  auto dueText = [&](const ClientObligation& o) -> std::wstring {
+    if (o.cycle == -1) return o.dueMonth >= 1 && o.dueMonth <= 7 ? kWeekdays[o.dueMonth] : L"—";  // weekly: the weekday
+    if (o.dueDay <= 0) return L"—";
+    wchar_t b[16];
+    if (o.cycle != 1 && o.dueMonth > 0) swprintf(b, 16, L"%d.%02d", o.dueDay, o.dueMonth);
+    else swprintf(b, 16, L"%d", o.dueDay);
+    return b;
+  };
+  auto monthlyOf = [](const ClientObligation& o) -> int {  // the browser's `monthlyNormOf`
+    if (o.normSeconds < 0) return -1;
+    if (o.monthly) return o.normSeconds;
+    return o.normSeconds / (o.cycle > 0 ? o.cycle : 1);
+  };
+  struct Col {
+    const wchar_t* head;
+    float w;
+  };
+  static const Col kCols[] = {{L"код", 50},  {L"вид", 78},        {L"прил.", 46},   {L"цикъл", 100}, {L"срок", 60}, {L"дни преди", 70},
+                              {L"план", 62}, {L"месечно", 70}, {L"одобр.", 56}, {L"отговорник", 178}};
+  float fixed = 0;
+  for (auto& c : kCols) fixed += c.w;
+  float nameW = std::max(180.f, r.w() - fixed);
+  // header: код, дейност, then the rest
+  float y = r.t;
+  auto colX = [&](int i) {  // i: index into kCols, the name sits after the first
+    float x = r.l + kCols[0].w + nameW;
+    for (int k = 1; k < i; k++) x += kCols[k].w;
+    return x;
+  };
+  ui.text(RectF(r.l + 8, y, r.l + kCols[0].w, y + 22), upper(kCols[0].head), 9.5f, P.dim, 600, Align::Left, VAlign::Bottom);
+  ui.text(RectF(r.l + kCols[0].w, y, r.l + kCols[0].w + nameW, y + 22), L"ДЕЙНОСТ", 9.5f, P.dim, 600, Align::Left, VAlign::Bottom);
+  for (int i = 1; i < 10; i++)
+    ui.text(RectF(colX(i) + 2, y, colX(i) + kCols[i].w - 2, y + 22), upper(kCols[i].head), 9.5f, P.dim, 600, Align::Left, VAlign::Bottom);
+  y += 26;
+  ui.divider(RectF(r.l, y - 1, r.r, y));
+
+  // per business line, in the server's order (a line the client has but the person does not see is not sent)
+  struct Item {
+    const ClientObligation* o;
+    const std::wstring* line;  // non-null: a heading
+    int count = 0, applicable = 0;
+  };
+  std::vector<Item> items;
+  int planSum = 0, monthlySum = 0;
+  std::vector<std::pair<int, std::wstring>> lines = d.lines;
+  for (auto& o : d.obligations)  // a line not among the partners (should not happen): still shown
+    if (std::none_of(lines.begin(), lines.end(), [&](auto& l) { return l.first == o.departmentId; })) lines.push_back({o.departmentId, L""});
+  for (auto& line : lines) {
+    std::vector<const ClientObligation*> rows;
+    for (auto& o : d.obligations)
+      if (o.departmentId == line.first) rows.push_back(&o);
+    if (rows.empty()) continue;
+    std::sort(rows.begin(), rows.end(), [](const ClientObligation* x, const ClientObligation* z) {
+      if (x->monthly != z->monthly) return !x->monthly;  // deadlines first
+      int cx = _wtoi(x->code.c_str()), cz = _wtoi(z->code.c_str());
+      if (cx != cz) return cx < cz;
+      return x->name < z->name;
+    });
+    Item h{nullptr, &line.second};
+    h.count = (int)rows.size();
+    for (auto* o : rows) h.applicable += o->applicable ? 1 : 0;
+    items.push_back(h);
+    for (auto* o : rows) {
+      items.push_back({o, nullptr});
+      if (o->applicable && o->normSeconds >= 0) {
+        planSum += o->normSeconds;
+        monthlySum += monthlyOf(*o);
+      }
+    }
+  }
+  RectF footer(r.l, r.b - 28, r.r, r.b);
+  RectF listR(r.l, y, r.r, footer.t - 4);
+  float contentH = 0;
+  for (auto& it : items) contentH += it.o ? 28.f : 34.f;
+  float off = ui.beginScroll(ui.id("cnom"), listR, contentH);
+  float yy = listR.t + off;
+  for (auto& it : items) {
+    if (!it.o) {
+      RectF hr(listR.l, yy, listR.r, yy + 34);
+      yy += 34;
+      if (hr.b < listR.t || hr.t > listR.b) continue;
+      std::wstring t = (it.line->empty() ? L"Бизнес линия" : *it.line) + L"  ·  " + num(it.count) + L" дейности, " + num(it.applicable) + L" приложими";
+      ui.text(RectF(hr.l + 6, hr.t + 8, hr.r, hr.b), t, 12.5f, P.text, 700, Align::Left, VAlign::Bottom);
+      continue;
+    }
+    const ClientObligation& o = *it.o;
+    RectF row(listR.l, yy, listR.r, yy + 28);
+    yy += 28;
+    if (row.b < listR.t || row.t > listR.b) continue;
+    if (o.approval) ui.p->rrect(row, 4, amber.withA(P.dark ? 0.14f : 0.10f));  // the browser's amber: needs approval
+    Color fg = o.applicable ? P.text : P.faint;
+    ui.text(RectF(row.l + 8, row.t, row.l + kCols[0].w, row.b), o.code, 12.f, fg, 600);
+    RectF nameR(row.l + kCols[0].w, row.t, row.l + kCols[0].w + nameW - 6, row.b);
+    ui.text(nameR, o.name, 12.f, fg);
+    if (!o.hint.empty()) ui.tooltip(nameR, o.hint);
+    auto cell = [&](int i, const std::wstring& t, Color c, int weight = 400) {
+      ui.text(RectF(colX(i) + 2, row.t, colX(i) + kCols[i].w - 4, row.b), t, 12.f, c, weight);
+    };
+    cell(1, o.monthly ? L"услуга" : L"срок", P.dim);
+    cell(2, o.applicable ? L"✓" : L"—", o.applicable ? green : P.faint, 700);
+    cell(3, cycleText(o.cycle), fg);
+    cell(4, dueText(o), fg);
+    cell(5, o.lead > 0 ? num(o.lead) : L"—", fg);
+    cell(6, o.normSeconds >= 0 ? hm(o.normSeconds) : L"—", o.normSeconds >= 0 ? fg : P.faint);
+    int m = monthlyOf(o);
+    cell(7, m >= 0 ? hm(m) : L"—", m >= 0 ? fg : P.faint);
+    cell(8, o.approval ? L"✓" : L"", amber, 700);
+    cell(9, o.assignee.empty() ? L"—" : o.assignee, o.assignee.empty() ? P.faint : fg);
+  }
+  ui.endScroll();
+  ui.divider(RectF(r.l, footer.t, r.r, footer.t + 1));
+  ui.text(RectF(footer.l + 6, footer.t, footer.r, footer.b),
+          L"Приложимите:  планирано време " + hm(planSum) + L"  ·  месечно " + hm(monthlySum) +
+              L"  ·  промени по номенклатурата — в браузъра",
+          12.f, P.dim);
 }
 
 // ================================================================ Административни дейности

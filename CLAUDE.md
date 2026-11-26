@@ -18,6 +18,11 @@ Guidance for Claude Code in this repository: **Kanban Desktop**, the Windows com
 - **The rail never activates.** The panel hides when it loses activation (a click elsewhere); the rail beside it is
   `WS_EX_NOACTIVATE` and answers `WM_MOUSEACTIVATE` with `MA_NOACTIVATE`. Anything clickable next to the panel must do
   the same, or a click on it closes the panel.
+- **Every window the app draws must be in the frame list** (`Frames` in `App::run`): a window left out repaints only when
+  input wakes it — the rail's highlight lagged one click until 0.6.0.
+- **Tabs follow the browser's and the server's rules** (`App::tabAllowed`): Админ. дейности needs the right to track time,
+  Одитен график needs audit cards in the person's view (`hasAuditCards`). The data is the server's: never filter or
+  widen what an endpoint returned.
 - **„За разпределяне“ lives here.** The browser has had no screen for attaching time without a card since its time pane
   went (2026-09-08); entries recorded without a card (before 0.5.0 the desktop could start one) get their card only
   here. Keep it working. No new stopwatch without a card: the user removed that in 0.5.0.
