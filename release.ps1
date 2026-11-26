@@ -24,5 +24,8 @@ if ($LASTEXITCODE) { throw 'The build failed: nothing was committed' }
 git add CMakeLists.txt CHANGELOG.md
 git commit -m "Release $Version"
 git tag "v$Version"
-git push origin HEAD "v$Version"
+# git reports progress on stderr; with output redirected Windows PowerShell would call that an error. Its exit code decides.
+$ErrorActionPreference = 'Continue'
+git push origin HEAD "v$Version" 2>&1 | ForEach-Object { "$_" }
+if ($LASTEXITCODE) { throw "git push failed (exit $LASTEXITCODE)" }
 "Pushed v$Version. The release appears at https://github.com/mugen89/planirane-desktop/releases in a few minutes."
