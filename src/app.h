@@ -36,6 +36,9 @@ class App {
   std::wstring error;         // last action's error, shown in the panel
   std::wstring loginError;
   bool loginBusy = false;
+  Summary summary;             // the unified board's summary table (GET /desktop/summary)
+  std::wstring summaryError;
+  bool summaryBusy = false;
   std::string updateVersion;   // a newer published version, when there is one
   std::wstring updateNote;     // what the update is doing, or why it did not
   bool updateBusy = false;
@@ -48,6 +51,8 @@ class App {
   void signOut();
   void refresh();
   void startTimer();          // without a card: the desktop-only route (the server caps it, maxUnassignedTime)
+  void startTimerOnCard(int cardId);  // or, while one runs, attach it to that card
+  void refreshSummary();
   void pauseTimer();
   void resumeTimer();
   void stopTimer();
@@ -87,6 +92,7 @@ class App {
   HWINEVENTHOOK fgHook_ = nullptr;
   double lastPoll_ = 0;
   double nextUpdateCheck_ = 0;
+  double summaryAt_ = 0;
   double panelHiddenAt_ = 0;  // a click on the tray icon first closes the flyout; it must not reopen it
   int stateSeq_ = 0;          // answers older than the newest request are ignored
 };

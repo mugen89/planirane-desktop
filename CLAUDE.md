@@ -17,6 +17,9 @@ Guidance for Claude Code in this repository: **Kanban Desktop**, the Windows com
   closing. Measure after changes (Task Manager / `Get-Process`): idle was 0 ms CPU per 10 s, ~4–8 MB private.
 - **UI text is Bulgarian; identifiers and comments English.** „Бизнес линия“, not „отдел“, in anything a
   user reads.
+- **The summary table is computed by the server** (`GET /desktop/summary`) with `server/src/shared/summary.ts`, the same
+  module the browser's table uses (web CHANGELOG 331). Never recompute it here; the response's `layout` says which columns.
+  Compare with the browser after a change (Chrome: the unified board's table vs. the endpoint, row by row).
 - **The taskbar button covers Windows' Widgets (weather/news) slot** — on purpose (see PLAN.md, decision 3).
   Do not try to switch Widgets off programmatically: UCPD refuses it to every ordinary process.
 - **Testing on the user's PC: never synthetic keyboard or mouse input.** The first test session typed into

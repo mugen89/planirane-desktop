@@ -48,7 +48,8 @@ most once a day.
 
 | | |
 |---|---|
-| Click the stopwatch on the taskbar | The panel: start, pause, resume, stop, cancel; stopped time waits for ✓ / ✕ |
+| Click the stopwatch on the taskbar | The panel: the stopwatch (start, pause, resume, stop, cancel; stopped time waits for ✓ / ✕) and the unified board's summary table |
+| Click a row or a number in the table | Its cards; „Пусни“ starts the stopwatch on one, „Закачи“ moves a running stopwatch onto it |
 | Right-click it, or the tray icon | The menu: the same actions, open in the browser, sign out, close |
 | First start | The sign-in window: server address (e.g. `http://server:8106`), username, password |
 
@@ -56,7 +57,8 @@ A stopwatch started here has no card; choose the card in the browser (at stop or
 only a few such entries at a time (Админ setting „максимум неразпределени“).
 
 Command line (talks to the copy already running): `KanbanDesktop.exe --panel | --hide | --start | --pause |
---resume | --stop | --cancel | --refresh | --update | --signin | --signout | --quit`.
+--resume | --stop | --cancel | --refresh | --update | --signin | --signout | --quit`, and `--select:<row>[:<column>]`
+(what a click on the table does; used by tests).
 
 Settings live in `%APPDATA%\KanbanDesktop` (`config.json`, `session.dat`). `KANBANDESKTOP_DATA` points a copy at
 another folder and makes it a separate instance (for tests); `KANBANDESKTOP_LOG` writes a log;

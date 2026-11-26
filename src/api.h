@@ -44,6 +44,38 @@ struct TimeState {
   double skew = 0;        // server clock minus this PC's clock, seconds
 };
 
+// The summary table of the unified board (GET /desktop/summary): computed by the server with the same code as the
+// browser's table, so the numbers cannot differ. The layout says which columns, in which order.
+struct SumColumn {
+  std::string key;          // "plan", "status:<band>", "approval", "tasks", "clients", "count", "done", "exec"
+  std::wstring head, sub;
+  rt::Color color;
+  bool hasColor = false;
+};
+struct SumRow {
+  std::string key;
+  std::wstring label;
+  std::map<std::string, int> byStatus;
+  int open = 0, load = 0, awaiting = 0, done = 0, planSeconds = 0, withClient = 0, noClient = 0;
+  std::vector<std::wstring> assignees;
+};
+struct SumCard {
+  int id = 0, boardId = 0, normSeconds = 0;
+  bool hasClient = false, awaiting = false, closed = false;
+  std::string status, row;
+  std::wstring title, clientName, obligationCode, dueDate, lane, worker;
+};
+struct Summary {
+  bool loaded = false;
+  std::string subviewId, table;
+  std::wstring subviewLabel, nameHead;
+  std::vector<SumColumn> layout;
+  std::vector<SumRow> rows;
+  SumRow total;
+  std::vector<SumCard> cards;
+};
+Summary parseSummary(const rt::Json& j);
+
 struct Reply {
   int status = 0;         // 0: the server was not reached
   rt::Json json;

@@ -8,6 +8,8 @@ class Panel : public rt::UiWindow {
  public:
   bool create(HINSTANCE inst, RECT at);
   void showAt(RECT at);
+  // What a click on a row (column empty) or on a number does — also `--select row:column` from the command line.
+  void select(const std::string& row, const std::string& col);
 
  protected:
   void paint() override;
@@ -15,7 +17,11 @@ class Panel : public rt::UiWindow {
   bool onClose() override;
 
  private:
+  float paintTimer(rt::RectF r);         // returns where it ended
+  void paintSummary(rt::RectF area);
+  static std::wstring toUpperBg(const std::wstring& s);
   double armedCancel_ = 0;  // "Откажи" asks once more for three seconds
+  std::string selRow_, selCol_;  // the clicked row ("__total" = ОБЩО) and column ("" = the whole row)
 };
 
 class LoginWindow : public rt::UiWindow {

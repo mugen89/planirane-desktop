@@ -250,13 +250,36 @@ void App::command(const std::wstring& c) {
   } else if (c == L"hide") hidePanel();
   else if (c == L"signin") showLogin();
   else if (c == L"signout") signOut();
-  else if (c == L"refresh") refresh();
+  else if (c == L"refresh") {
+    refresh();
+    refreshSummary();
+  }
   else if (c == L"start") startTimer();
   else if (c == L"pause") pauseTimer();
   else if (c == L"resume") resumeTimer();
   else if (c == L"stop") stopTimer();
   else if (c == L"cancel") cancelTimer();
   else if (c == L"update") checkForUpdate(true);
+  else if (c.rfind(L"shot:", 0) == 0) {  // shot:<png>[|row[|column]] — the panel with this data, drawn off screen (checks)
+    std::vector<std::wstring> parts;
+    std::wstring rest = c.substr(5);
+    for (size_t at = 0;;) {
+      size_t bar = rest.find(L'|', at);
+      parts.push_back(rest.substr(at, bar == std::wstring::npos ? std::wstring::npos : bar - at));
+      if (bar == std::wstring::npos) break;
+      at = bar + 1;
+    }
+    if (gfx().ensure()) {
+      Panel shot;
+      shot.select(parts.size() > 1 ? narrow(parts[1]) : "", parts.size() > 2 ? narrow(parts[2]) : "");
+      auto target = gfx().target(920, 700);
+      if (target && shot.renderTo(target.Get(), 920, 700, 3, !systemUsesLightTheme())) savePng(target.Get(), parts[0]);
+    }
+  } else if (c.rfind(L"select:", 0) == 0 && panel_) {  // select:<row>[:<column>] — the panel's row / cell, as a click would
+    std::string rest = narrow(c.substr(7));
+    size_t colon = rest.find(':');  // row keys never contain one; a column key may ("status:…")
+    panel_->select(rest.substr(0, colon), colon == std::string::npos ? "" : rest.substr(colon + 1));
+  }
 }
 
 // ---------------------------------------------------------------- session
@@ -322,6 +345,7 @@ void App::signOut() {
   haveState = false;
   st = {};
   user = {};
+  summary = {};
   error.clear();
   stateSeq_++;
   updatePill();
@@ -337,6 +361,7 @@ void App::sessionLost() {
   haveState = false;
   st = {};
   user = {};
+  summary = {};
   stateSeq_++;
   hidePanel();
   updatePill();
@@ -394,6 +419,41 @@ void App::action(const wchar_t* method, const std::string& path, const Json* bod
 }
 
 void App::startTimer() { action(L"POST", "/api/time/start", nullptr); }
+
+void App::startTimerOnCard(int cardId) {
+  Json b = Json::object();
+  b.set("cardId", cardId);
+  // A stopwatch already running (started without a card, say) is attached to the card instead — the server's
+  // „избор на карта, докато тече" (PATCH /time/running); otherwise a new one starts on it.
+  if (st.hasRunning) action(L"PATCH", "/api/time/running", &b);
+  else action(L"POST", "/api/time/start", &b);
+}
+
+void App::refreshSummary() {
+  if (!signedIn || api.base.empty() || summaryBusy) return;
+  SYSTEMTIME t;
+  GetLocalTime(&t);
+  char path[96];
+  snprintf(path, sizeof path, "/api/desktop/summary?year=%d&month=%d", t.wYear, t.wMonth);
+  summaryBusy = true;
+  summaryAt_ = nowSec();
+  api.send(L"GET", path, nullptr, [this](const Reply& r) {
+    summaryBusy = false;
+    if (r.status == 401) {
+      sessionLost();
+      return;
+    }
+    if (r.ok()) {
+      summary = parseSummary(r.json);
+      summaryError.clear();
+    } else if (r.status == 404) {
+      summaryError = L"Сървърът още няма таблицата за настолното приложение — нужна е по-нова версия на сървъра.";
+    } else {
+      summaryError = r.error;
+    }
+    if (panel_) panel_->invalidate();
+  });
+}
 void App::pauseTimer() { action(L"POST", "/api/time/pause", nullptr); }
 void App::resumeTimer() { action(L"POST", "/api/time/resume", nullptr); }
 void App::stopTimer() { action(L"POST", "/api/time/stop", nullptr); }
@@ -424,7 +484,10 @@ void App::togglePanel() {
   MONITORINFO mi{};
   mi.cbSize = sizeof mi;
   GetMonitorInfoW(t.mon ? t.mon : MonitorFromWindow(hwnd_, MONITOR_DEFAULTTOPRIMARY), &mi);
-  int w = (int)(372 * s), h = (int)(470 * s), m = (int)(12 * s);
+  // Wide enough for the summary table; never more than the screen.
+  int m = (int)(12 * s);
+  int w = std::min<int>((int)(920 * s), mi.rcWork.right - mi.rcWork.left - 2 * m);
+  int h = std::min<int>((int)(700 * s), mi.rcWork.bottom - mi.rcWork.top - 2 * m);
   int right = pill_.shown() ? anchor.right : mi.rcWork.right - m;
   int bottom = mi.rcWork.bottom - m;
   RECT at{std::max<LONG>(mi.rcWork.left + m, right - w), std::max<LONG>(mi.rcWork.top + m, bottom - h), 0, 0};
@@ -439,6 +502,7 @@ void App::togglePanel() {
   }
   panel_->showAt(at);
   refresh();
+  refreshSummary();
 }
 
 void App::hidePanel() {
@@ -552,7 +616,10 @@ void App::trayMenu(POINT at) {
     case kMenuPause: pauseTimer(); break;
     case kMenuResume: resumeTimer(); break;
     case kMenuStop: stopTimer(); break;
-    case kMenuRefresh: refresh(); break;
+    case kMenuRefresh:
+      refresh();
+      refreshSummary();
+      break;
     case kMenuBrowser: openBrowser(); break;
     case kMenuPill:
       cfg.pill = !cfg.pill;
@@ -579,6 +646,7 @@ void App::tick() {
     }
   }
   if (signedIn && nowSec() - lastPoll_ >= kPollEvery) refresh();
+  if (signedIn && panel_ && panel_->visible() && nowSec() - summaryAt_ >= 60) refreshSummary();  // while someone looks
   if (nowSec() >= nextUpdateCheck_) {
     nextUpdateCheck_ = nowSec() + 6 * 3600 + (GetTickCount() % 900);  // a little spread, so an office does not ask at once
     checkForUpdate(false);

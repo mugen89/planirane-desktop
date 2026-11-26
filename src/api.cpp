@@ -55,6 +55,80 @@ std::string sessionCookieFrom(const std::vector<std::string>& setCookies) {
   return {};
 }
 
+namespace {
+rt::Color hexColor(const std::string& s) {
+  rt::Color c;
+  if (!rt::Color::parse(s, c)) c = rt::Color::hex(0x6C7A89);
+  return c;
+}
+SumRow parseRow(const Json& j) {
+  SumRow r;
+  r.key = j.str("key");
+  r.label = wstr(j, "label");
+  if (auto b = j.find("byStatus"); b && b->isObj())
+    for (auto& kv : b->o)
+      if (kv.second.t == Json::T::Num) r.byStatus[kv.first] = (int)kv.second.n;
+  r.open = num(j, "open");
+  r.load = num(j, "load");
+  r.awaiting = num(j, "awaiting");
+  r.done = num(j, "done");
+  r.planSeconds = num(j, "planSeconds");
+  r.withClient = num(j, "withClient");
+  r.noClient = num(j, "noClient");
+  if (auto a = j.find("assignees"); a && a->isArr())
+    for (auto& x : a->a)
+      if (x.t == Json::T::Str) r.assignees.push_back(widen(x.s));
+  return r;
+}
+}  // namespace
+
+Summary parseSummary(const Json& j) {
+  Summary s;
+  auto sv = j.find("subview");
+  if (!sv || !sv->isObj()) return s;
+  s.loaded = true;
+  s.subviewId = sv->str("id");
+  s.table = sv->str("table");
+  s.subviewLabel = wstr(*sv, "label");
+  s.nameHead = wstr(j, "nameHead");
+  if (auto l = j.find("layout"); l && l->isArr())
+    for (auto& c : l->a) {
+      SumColumn col;
+      col.key = c.str("key");
+      col.head = wstr(c, "head");
+      col.sub = wstr(c, "sub");
+      if (auto h = c.find("color"); h && h->t == Json::T::Str) {
+        col.color = hexColor(h->s);
+        col.hasColor = true;
+      }
+      s.layout.push_back(std::move(col));
+    }
+  if (auto rows = j.find("rows"); rows && rows->isArr())
+    for (auto& r : rows->a) s.rows.push_back(parseRow(r));
+  if (auto t = j.find("total"); t && t->isObj()) s.total = parseRow(*t);
+  if (auto cards = j.find("cards"); cards && cards->isArr())
+    for (auto& c : cards->a) {
+      SumCard k;
+      k.id = num(c, "id");
+      k.boardId = num(c, "boardId");
+      k.normSeconds = num(c, "normSeconds");
+      auto cid = c.find("clientId");
+      k.hasClient = cid && cid->t == Json::T::Num;
+      k.awaiting = c.flag("awaiting", false);
+      k.closed = c.flag("closed", false);
+      k.status = c.str("status");
+      k.row = c.str("row");
+      k.title = wstr(c, "title");
+      k.clientName = wstr(c, "clientName");
+      k.obligationCode = wstr(c, "obligationCode");
+      k.dueDate = wstr(c, "dueDate");
+      k.lane = wstr(c, "lane");
+      k.worker = wstr(c, "worker");
+      s.cards.push_back(std::move(k));
+    }
+  return s;
+}
+
 double unixNow() {
   FILETIME ft;
   GetSystemTimePreciseAsFileTime(&ft);

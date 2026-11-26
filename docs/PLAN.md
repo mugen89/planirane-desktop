@@ -30,15 +30,15 @@ glance) away. Local only, like the web app.
 
 1. ✅ **Foundation + the stopwatch on the taskbar** (this slice).
 2. ✅ **Installable + updates** (0.1.0) — per-user installer: folder of choice, Start with Windows, desktop icon, Start menu, `Uninstall.exe` in the folder and the Settings › Apps entry; self-update from GitHub Releases with a SHA-256 check; `release.ps1` + a GitHub Actions workflow that builds and publishes. Tested: install → update 0.1.0 → 0.1.1 through a stand-in for GitHub → uninstall leaves nothing behind.
-3. **The collector summary in the panel** — the summary table of the unified board („Обединена дъска“) for the person's default subview, interactive: a cell lists its cards; a card can start the stopwatch, move on, take a вх.№. To keep one computation, the rows should be computed by the server with the same code the web uses (`web/src/boardPresets.ts::buildRows` moved to a module both import) rather than ported to C++.
-4. **Choose the card** — at stop or later, attach a stopwatch session to a card from the desktop (today: in the browser).
+3. ✅ **The collector summary in the panel** (0.2.0) — the summary table of the unified board for the person's subview, the same numbers as the browser: the computation moved into `server/src/shared/summary.ts` of the web app, which both the browser and `GET /desktop/summary` use (verified: the admin's table identical in the browser before/after the move and in the endpoint). A row or a number lists its cards; a card starts the stopwatch, or takes the running one. Still to come here: moving a card on, вх.№, the client complexity/independence columns, choosing another subview.
+4. **Choose the card** — partly done in 0.2.0 (a running stopwatch is attached to a card from the table); still to come: attaching a stopped / „за разпределяне“ entry.
 5. **Win+Q overlay** — dim the screen and show the summary table full size (Radial's overlay + hook; Win+Q is Windows Search's shortcut, so the hook takes it over, which Radial already supports).
 
 ## Server endpoints the desktop relies on
 
 `POST /api/auth/login` · `GET /api/auth/session` · `POST /api/auth/logout` · `GET /api/time/state` ·
-`POST /api/time/start | pause | resume | stop` · `DELETE /api/time/running` ·
-`POST /api/time/entries/:id/confirm | discard`. Listed in the web app's `docs/API.md` too: changing their
+`POST /api/time/start | pause | resume | stop` (`start` with or without `cardId`) · `PATCH /api/time/running` (`cardId`) ·
+`DELETE /api/time/running` · `POST /api/time/entries/:id/confirm | discard` · `GET /api/desktop/summary?year=&month=`. Listed in the web app's `docs/API.md` too: changing their
 shape breaks installed desktops.
 
 ## Risks and open points
