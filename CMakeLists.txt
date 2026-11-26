@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 # The version of a release. The GitHub workflow refuses a tag that does not match it (vX.Y.Z).
-project(KanbanDesktop VERSION 0.1.0 LANGUAGES CXX RC)
+project(KanbanDesktop VERSION 0.2.0 LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
