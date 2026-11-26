@@ -83,6 +83,17 @@ class App {
   struct DayRowIn {
     int activityId = 0;
     std::wstring input, note;
+    std::string from, to;  // an absence over a period: the same time on each day (the server decides which)
+    int substituteId = 0;  // an absence's substitute (0: none)
+  };
+  struct DayLineIn {
+    int colleagueId = 0, clientId = 0;  // clientId -1: „неприложимо“
+    std::wstring input, note;
+  };
+  struct DayLineSetIn {  // all of an activity's lines for the day — the server compares them by (colleague, client)
+    int activityId = 0;
+    std::string from, to;
+    std::vector<DayLineIn> lines;
   };
   AdminDay day;
   int daySeq = 0;  // a new answer from the server: the form re-reads it
@@ -90,7 +101,7 @@ class App {
   std::wstring dayError, dayNote;
   double dayNoteUntil = 0;
   void loadDay(const std::string& date = {});  // today when empty
-  void saveDay(const std::vector<DayRowIn>& rows);
+  void saveDay(const std::vector<DayRowIn>& rows, const std::vector<DayLineSetIn>& sets = {});
   // Календар
   Calendar cal;
   bool calBusy = false;

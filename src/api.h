@@ -162,12 +162,20 @@ struct DayActivity {
   int id = 0;
   std::wstring name, hint;
   bool acceptsTime = false, requiresNote = false, isAbsence = false, roleLocked = false;
-  bool lines = false;  // asks for a colleague or a client: lines per day, done in the browser for now
+  bool lines = false;           // asks for a colleague or a client: lines per day (`lineSets`)
+  bool asksColleague = false;
+  std::string clientMode;       // none / required / or_na („неприложимо“ allowed)
   std::vector<DayActivity> children;
 };
 struct DayEntry {
   int activityId = 0, seconds = 0;
+  int colleagueId = 0, clientId = 0, substituteId = 0;  // 0: none
   std::wstring note;
+};
+struct DayOption {  // a colleague, a client or a substitute the server offers for the day
+  int id = 0;
+  std::wstring name;
+  bool inactive = false;  // only because a recorded line names it
 };
 struct AdminDay {
   bool loaded = false;
@@ -175,6 +183,7 @@ struct AdminDay {
   std::vector<DayActivity> activities;  // the roots, each with its children
   std::vector<DayEntry> entries;
   int adminSeconds = 0, nonWorkingSeconds = 0, cardSeconds = 0, totalSeconds = 0;
+  std::vector<DayOption> colleagues, clients, substitutes;  // the pickers' lists — the server's (role, department)
 };
 AdminDay parseDay(const rt::Json& j);
 

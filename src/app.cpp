@@ -286,6 +286,7 @@ void App::command(const std::wstring& c) {
       shot.select(parts.size() > 1 ? narrow(parts[1]) : "", parts.size() > 2 ? narrow(parts[2]) : "");
       shot.selectDay(parts.size() > 1 ? narrow(parts[1]) : "");  // on the calendar: a day (YYYY-MM-DD), „outside“, „undated“
       if (tab == Tab::Clients && parts.size() > 1) shot.selectClient(_wtoi(parts[1].c_str()));  // on Клиенти: a client id
+      if (tab == Tab::AdminDay && parts.size() > 1) shot.scrollDayTo((float)_wtof(parts[1].c_str()));  // how far down
       if (tab == Tab::Audit && parts.size() > 1)  // on Одитен график: the depth opened, a card chosen
         shot.auditView(_wtoi(parts[1].c_str()), parts.size() > 2 ? _wtoi(parts[2].c_str()) : 0);
       float s = 1;
@@ -322,6 +323,37 @@ void App::command(const std::wstring& c) {
       row.activityId = _wtoi(rest.substr(0, p1).c_str());
       row.input = rest.substr(p1 + 1, p2 == std::wstring::npos ? std::wstring::npos : p2 - p1 - 1);
       if (p2 != std::wstring::npos) row.note = rest.substr(p2 + 1);
+      saveDay({row});
+    }
+  } else if (c.rfind(L"dayline:", 0) == 0 || c.rfind(L"dayabs:", 0) == 0) {
+    // dayline:<activity>:<colleague|0>:<client|0|na>:<minutes>[:<comment>] — a line activity's lines = this one line
+    // dayabs:<activity>:<minutes>:<from YYYY-MM-DD>:<to>[:<substitute>] — an absence over a period (checks)
+    bool line = c.rfind(L"dayline:", 0) == 0;
+    std::vector<std::wstring> f;
+    std::wstring rest = c.substr(line ? 8 : 7);
+    for (size_t at = 0;;) {
+      size_t colon = rest.find(L':', at);
+      f.push_back(rest.substr(at, colon == std::wstring::npos ? std::wstring::npos : colon - at));
+      if (colon == std::wstring::npos) break;
+      at = colon + 1;
+    }
+    if (line && f.size() >= 4) {
+      DayLineSetIn set;
+      set.activityId = _wtoi(f[0].c_str());
+      DayLineIn l;
+      l.colleagueId = _wtoi(f[1].c_str());
+      l.clientId = f[2] == L"na" ? -1 : _wtoi(f[2].c_str());
+      l.input = f[3];
+      if (f.size() > 4) l.note = f[4];
+      set.lines.push_back(l);
+      saveDay({}, {set});
+    } else if (!line && f.size() >= 4) {
+      DayRowIn row;
+      row.activityId = _wtoi(f[0].c_str());
+      row.input = f[1];
+      row.from = narrow(f[2]);
+      row.to = narrow(f[3]);
+      if (f.size() > 4) row.substituteId = _wtoi(f[4].c_str());
       saveDay({row});
     }
   } else if (c.rfind(L"railshot:", 0) == 0) {  // railshot:<png> — the rail drawn off screen at its real size
@@ -714,8 +746,8 @@ void App::loadDay(const std::string& date) {
   });
 }
 
-void App::saveDay(const std::vector<DayRowIn>& rows) {
-  if (!signedIn || dayBusy || rows.empty() || day.date.empty()) return;
+void App::saveDay(const std::vector<DayRowIn>& rows, const std::vector<DayLineSetIn>& sets) {
+  if (!signedIn || dayBusy || (rows.empty() && sets.empty()) || day.date.empty()) return;
   Json b = Json::object();
   b.set("date", day.date);
   Json arr = Json::array();
@@ -724,9 +756,38 @@ void App::saveDay(const std::vector<DayRowIn>& rows) {
     x.set("activityId", r.activityId);
     x.set("input", narrow(trim(r.input)));
     x.set("note", narrow(trim(r.note)));
+    if (!r.from.empty() && !r.to.empty()) {
+      x.set("from", r.from);
+      x.set("to", r.to);
+    }
+    if (r.substituteId > 0) x.set("substituteId", r.substituteId);
     arr.push(x);
   }
   b.set("rows", arr);
+  if (!sets.empty()) {
+    Json ls = Json::array();
+    for (auto& s : sets) {
+      Json x = Json::object();
+      x.set("activityId", s.activityId);
+      if (!s.from.empty() && !s.to.empty()) {
+        x.set("from", s.from);
+        x.set("to", s.to);
+      }
+      Json lines = Json::array();
+      for (auto& l : s.lines) {
+        Json y = Json::object();
+        if (l.colleagueId > 0) y.set("colleagueId", l.colleagueId);
+        if (l.clientId > 0) y.set("clientId", l.clientId);
+        else if (l.clientId < 0) y.set("clientId", "na");
+        y.set("input", narrow(trim(l.input)));
+        y.set("note", narrow(trim(l.note)));
+        lines.push(y);
+      }
+      x.set("lines", lines);
+      ls.push(x);
+    }
+    b.set("lineSets", ls);
+  }
   dayBusy = true;
   dayError.clear();
   if (panel_) panel_->invalidate();

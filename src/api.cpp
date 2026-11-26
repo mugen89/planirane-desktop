@@ -104,8 +104,10 @@ DayActivity parseActivity(const Json& n) {
   a.requiresNote = n.flag("requiresNote", false);
   a.isAbsence = n.flag("isAbsence", false);
   a.roleLocked = n.flag("roleLocked", false);
-  std::string mode = n.str("clientMode");
-  a.lines = n.flag("asksColleague", false) || (!mode.empty() && mode != "none");
+  a.clientMode = n.str("clientMode");
+  if (a.clientMode.empty()) a.clientMode = "none";
+  a.asksColleague = n.flag("asksColleague", false);
+  a.lines = a.asksColleague || a.clientMode != "none";
   if (auto c = n.find("children"); c && c->isArr())
     for (auto& x : c->a)
       if (x.flag("isActive", true)) a.children.push_back(parseActivity(x));
@@ -121,7 +123,16 @@ AdminDay parseDay(const Json& j) {
     for (auto& n : t->a)
       if (n.flag("isActive", true)) d.activities.push_back(parseActivity(n));
   if (auto e = j.find("entries"); e && e->isArr())
-    for (auto& x : e->a) d.entries.push_back({num(x, "activityId"), num(x, "seconds"), wstr(x, "note")});
+    for (auto& x : e->a)
+      d.entries.push_back({num(x, "activityId"), num(x, "seconds"), num(x, "colleagueId"), num(x, "clientId"), num(x, "substituteId"),
+                           wstr(x, "note")});
+  auto options = [&](const char* key, std::vector<DayOption>& out) {
+    if (auto o = j.find(key); o && o->isArr())
+      for (auto& x : o->a) out.push_back({num(x, "id"), wstr(x, "name"), x.flag("inactive", false)});
+  };
+  options("colleagueOptions", d.colleagues);
+  options("clientOptions", d.clients);
+  options("substituteOptions", d.substitutes);
   if (auto c = j.find("collectors"); c && c->isObj()) {
     d.adminSeconds = num(*c, "adminSeconds");
     d.nonWorkingSeconds = num(*c, "nonWorkingSeconds");

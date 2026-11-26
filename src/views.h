@@ -16,6 +16,7 @@ class Panel : public rt::UiWindow {
   void select(const std::string& row, const std::string& col);
   void selectDay(const std::string& day) { calSel_ = day; }  // the calendar's day / bucket — also `--shot` for checks
   void selectClient(int id) { selClient_ = id; }  // --shot on the Клиенти tab
+  void scrollDayTo(float y) { dayScrollWanted_ = y; }  // --shot on Админ. дейности: how far down the list
   void auditView(int depth, int card) {  // --shot on the Одитен график tab: how far opened, which card chosen
     auditDepthWanted_ = depth;
     auditCard_ = card;
@@ -62,6 +63,15 @@ class Panel : public rt::UiWindow {
   void paintClientNomenclature(rt::RectF r);
   int dayFormSeq_ = -1;       // Админ. дейности: which answer of the server the form was filled from
   std::map<int, std::wstring> dayInput_, dayNoteIn_;  // activity id → the typed time / comment
+  struct DayLineDraft {  // a line of an activity that asks for a colleague / a client
+    int colleagueId = 0, clientId = 0;  // clientId -1: „неприложимо“
+    std::wstring input, note;
+  };
+  std::map<int, std::vector<DayLineDraft>> dayLines_;  // line activity → its lines (the form)
+  std::set<int> dayRanged_;                            // absences written over a period
+  std::map<int, std::wstring> dayFrom_, dayTo_;        // that period, as typed (дд.мм.гггг)
+  std::map<int, int> daySub_;                          // an absence's substitute (0: none)
+  float dayScrollWanted_ = -1;
   std::map<int, std::wstring> refInput_;  // „№ вх. док.“ typed under a card the server would not close without one
 };
 

@@ -116,6 +116,20 @@ std::wstring dmyOf(int z) {
   swprintf(b, 16, L"%02d.%02d.%04d", d, m, y);
   return b;
 }
+std::wstring dmyFromIso(const std::string& iso) {  // "2026-11-26" -> "26.11.2026"
+  if (iso.size() < 10) return widen(iso);
+  return widen(iso.substr(8, 2) + "." + iso.substr(5, 2) + "." + iso.substr(0, 4));
+}
+std::string isoFromDmy(const std::wstring& t0) {  // "26.11.2026" (or "2026-11-26") -> "2026-11-26"; else as typed
+  std::wstring t = trim(t0);
+  int d = 0, m = 0, y = 0;
+  if (swscanf(t.c_str(), L"%d.%d.%d", &d, &m, &y) == 3 && y > 1900 && m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+    char b[16];
+    snprintf(b, sizeof b, "%04d-%02d-%02d", y, m, d);
+    return b;
+  }
+  return narrow(t);  // the server answers „Невалиден период“ if it is not a date
+}
 std::wstring selfExe() {
   wchar_t p[MAX_PATH];
   DWORD n = GetModuleFileNameW(nullptr, p, MAX_PATH);
@@ -953,13 +967,13 @@ void Panel::paintAdminDay(RectF area) {
     bool today = d.date >= todayIso();
     RectF prev(area.r - 276, y + 1, area.r - 240, y + 29), dateR(area.r - 236, y, area.r - 40, y + 30), next(area.r - 36, y + 1, area.r, y + 29);
     if (ui.iconButton(ui.id("dprev"), prev, kPrev, L"Предишен ден", !a.dayBusy)) {
-      std::string p = addDays(d.date, -1);
-      after([p] { app().loadDay(p); });
+      std::string pd = addDays(d.date, -1);
+      after([pd] { app().loadDay(pd); });
     }
     ui.text(dateR, longDate(d.date), 12.5f, P.text, 600, Align::Center);
     if (ui.iconButton(ui.id("dnext"), next, kNext, L"Следващ ден", !a.dayBusy && !today)) {
-      std::string n = addDays(d.date, 1);
-      after([n] { app().loadDay(n); });
+      std::string nd = addDays(d.date, 1);
+      after([nd] { app().loadDay(nd); });
     }
     if (!today && ui.link(ui.id("dtoday"), RectF(area.r - 330, y, area.r - 282, y + 30), L"днес", 12.f))
       after([] { app().loadDay(todayIso()); });
@@ -972,20 +986,48 @@ void Panel::paintAdminDay(RectF area) {
     return;
   }
 
-  // What is recorded per activity (several lines when it asks for a colleague / a client: their sum).
-  std::map<int, int> recorded;
+  // ---- what is recorded, per activity
+  std::map<int, int> recorded, recordedSub;
   std::map<int, std::wstring> recordedNote;
+  std::map<int, std::vector<const DayEntry*>> entriesOf;
   for (auto& e : d.entries) {
     recorded[e.activityId] += e.seconds;
+    entriesOf[e.activityId].push_back(&e);
     if (recordedNote[e.activityId].empty()) recordedNote[e.activityId] = e.note;
+    if (!recordedSub[e.activityId]) recordedSub[e.activityId] = e.substituteId;
   }
+  std::map<int, const DayActivity*> act;
+  for (auto& r : d.activities) {
+    act[r.id] = &r;
+    for (auto& c : r.children) act[c.id] = &c;
+  }
+  auto serverLines = [&](const DayActivity& x) {  // a line activity's lines as the server has them
+    std::vector<DayLineDraft> v;
+    for (auto* e : entriesOf[x.id]) {
+      DayLineDraft l;
+      l.colleagueId = e->colleagueId;
+      l.clientId = e->clientId ? e->clientId : (x.clientMode == "or_na" ? -1 : 0);
+      l.input = e->seconds ? hm(e->seconds) : L"";
+      l.note = e->note;
+      v.push_back(l);
+    }
+    return v;
+  };
   // A new answer from the server: the form starts from it.
   if (dayFormSeq_ != a.daySeq) {
     dayFormSeq_ = a.daySeq;
     dayInput_.clear();
     dayNoteIn_.clear();
+    dayLines_.clear();
+    dayRanged_.clear();
+    dayFrom_.clear();
+    dayTo_.clear();
+    daySub_.clear();
     for (auto& [id, secs] : recorded) dayInput_[id] = secs ? hm(secs) : L"";
     for (auto& [id, note] : recordedNote) dayNoteIn_[id] = note;
+    for (auto& [id, sub] : recordedSub) daySub_[id] = sub;
+    for (auto& [id, x] : act)
+      if (x->lines) dayLines_[id] = serverLines(*x);
   }
 
   std::wstring totals = L"Карти " + hm(d.cardSeconds) + L"   ·   Административно " + hm(d.adminSeconds) + L"   ·   Неработно време " +
@@ -997,75 +1039,229 @@ void Panel::paintAdminDay(RectF area) {
     y += 38;
   }
 
-  // The rows: each root a heading, then its activities (or the root itself when it takes time and has none).
-  struct Line {
-    const DayActivity* act;
-    bool header;
+  // ---- what changed: rows (with an absence's period and substitute) and line sets (all of an activity's lines)
+  std::vector<App::DayRowIn> rowsOut;
+  std::vector<App::DayLineSetIn> setsOut;
+  std::set<int> changedIds;
+  for (auto& [id, xp] : act) {
+    const DayActivity& x = *xp;
+    if (x.roleLocked) continue;
+    if (x.lines) {
+      auto& drafts = dayLines_[id];
+      auto server = serverLines(x);
+      bool same = drafts.size() == server.size();
+      for (size_t i = 0; same && i < drafts.size(); i++)
+        same = drafts[i].colleagueId == server[i].colleagueId && drafts[i].clientId == server[i].clientId &&
+               trim(drafts[i].input) == server[i].input && trim(drafts[i].note) == trim(server[i].note);
+      if (!same) {
+        App::DayLineSetIn set;
+        set.activityId = id;
+        for (auto& l : drafts) set.lines.push_back({l.colleagueId, l.clientId, l.input, l.note});
+        setsOut.push_back(set);
+        changedIds.insert(id);
+      }
+    } else if (x.acceptsTime) {
+      std::wstring was = recorded[id] ? hm(recorded[id]) : L"";
+      bool ranged = x.isAbsence && dayRanged_.count(id) && !trim(dayFrom_[id]).empty() && !trim(dayTo_[id]).empty();
+      bool changed = trim(dayInput_[id]) != was || trim(dayNoteIn_[id]) != trim(recordedNote[id]) || ranged ||
+                     (x.isAbsence && daySub_[id] != recordedSub[id]);
+      if (changed) {
+        App::DayRowIn row;
+        row.activityId = id;
+        row.input = dayInput_[id];
+        row.note = dayNoteIn_[id];
+        if (ranged) {
+          row.from = isoFromDmy(dayFrom_[id]);
+          row.to = isoFromDmy(dayTo_[id]);
+        }
+        if (x.isAbsence) row.substituteId = daySub_[id];
+        rowsOut.push_back(row);
+        changedIds.insert(id);
+      }
+    }
+  }
+
+  // ---- the rows to draw
+  enum class K { Head, Row, Range, Sub, LineHead, Line, NoLines };
+  struct Item {
+    K k;
+    const DayActivity* x;
+    int line;
+    float h;
   };
-  std::vector<Line> lines;
+  std::vector<Item> items;
   for (auto& r : d.activities) {
-    lines.push_back({&r, true});
-    if (r.children.empty() && (r.acceptsTime || r.lines)) lines.push_back({&r, false});
+    items.push_back({K::Head, &r, -1, 32});
+    std::vector<const DayActivity*> xs;
+    if (r.children.empty() && (r.acceptsTime || r.lines)) xs.push_back(&r);
     for (auto& c : r.children)
-      if (c.acceptsTime || c.lines) lines.push_back({&c, false});
+      if (c.acceptsTime || c.lines) xs.push_back(&c);
+    for (auto* x : xs) {
+      if (x->lines) {
+        items.push_back({K::LineHead, x, -1, 42});
+        int n = (int)dayLines_[x->id].size();
+        if (n == 0) items.push_back({K::NoLines, x, -1, 24});
+        for (int i = 0; i < n; i++) items.push_back({K::Line, x, i, 40});
+      } else {
+        items.push_back({K::Row, x, -1, 42});
+        if (x->isAbsence && !x->roleLocked && x->acceptsTime) {
+          bool on = dayRanged_.count(x->id) > 0;
+          if (on) items.push_back({K::Range, x, -1, 38});
+          if (on || !trim(dayInput_[x->id]).empty() || daySub_[x->id] > 0) items.push_back({K::Sub, x, -1, 38});
+        }
+      }
+    }
   }
-  auto editable = [](const DayActivity& x) { return !x.lines && !x.roleLocked; };
-  std::vector<App::DayRowIn> changed;
-  for (auto& l : lines) {
-    if (l.header || !editable(*l.act)) continue;
-    int id = l.act->id;
-    std::wstring was = recorded[id] ? hm(recorded[id]) : L"";
-    if (trim(dayInput_[id]) != was || trim(dayNoteIn_[id]) != trim(recordedNote[id])) changed.push_back({id, dayInput_[id], dayNoteIn_[id]});
-  }
+
+  // the pickers' lists — the server's (colleagues of the firm, my clients, the substitutes of my department)
+  std::vector<std::wstring> colleagueNames = {L"— изберете колега —"};
+  for (auto& o : d.colleagues) colleagueNames.push_back(o.name + (o.inactive ? L" (неактивен)" : L""));
+  std::vector<std::wstring> subNames = {L"— без заместник —"};
+  for (auto& o : d.substitutes) subNames.push_back(o.name);
+  auto indexOf = [](const std::vector<DayOption>& v, int id) {
+    for (size_t i = 0; i < v.size(); i++)
+      if (v[i].id == id) return (int)i;
+    return -1;
+  };
 
   RectF bar(area.l, area.b - 40, area.r, area.b);
   RectF listR(area.l, y, area.r, bar.t - 8);
   float contentH = 0;
-  for (auto& l : lines) contentH += l.header ? 32.f : 42.f;
+  for (auto& it : items) contentH += it.h;
+  if (dayScrollWanted_ >= 0) {
+    ui.scrollTo(ui.id("dayrows"), dayScrollWanted_);
+    dayScrollWanted_ = -1;
+  }
   float off = ui.beginScroll(ui.id("dayrows"), listR, contentH);
   float yy = listR.t + off;
-  for (auto& l : lines) {
-    const DayActivity& x = *l.act;
-    if (l.header) {
-      RectF hr(listR.l + 4, yy, listR.r, yy + 32);
-      yy += 32;
-      if (hr.b < listR.t || hr.t > listR.b) continue;
-      ui.text(RectF(hr.l, hr.t + 6, hr.r, hr.b), x.name, 13.f, P.text, 700, Align::Left, VAlign::Bottom);
-      continue;
-    }
-    RectF row(listR.l, yy, listR.r, yy + 38);
-    yy += 42;
+  int addTo = 0, removeAct = 0, removeIdx = -1;
+  for (auto& it : items) {
+    RectF row(listR.l, yy, listR.r, yy + it.h - 4);
+    yy += it.h;
     if (row.b < listR.t || row.t > listR.b) continue;
-    ui.card(row, 6);
+    const DayActivity& x = *it.x;
     int id = x.id;
-    bool isChanged = std::any_of(changed.begin(), changed.end(), [id](const App::DayRowIn& c) { return c.activityId == id; });
-    if (isChanged) ui.p->rrect(RectF(row.l + 2, row.t + 4, row.l + 6, row.b - 4), 2.f, P.accent);
-    std::wstring name = x.name + (x.isAbsence ? L"  ·  отсъствие" : L"");
-    RectF nameR(row.l + 14, row.t, row.r - 560, row.b);
-    ui.text(nameR, name, 12.5f, P.text);
-    if (!x.hint.empty()) ui.tooltip(nameR, x.hint);
-    int rec = recorded[id];
-    ui.text(RectF(row.r - 556, row.t, row.r - 470, row.b), rec ? L"записано " + hm(rec) : L"", 11.5f, P.dim, 400, Align::Right);
-    if (x.lines) {
-      ui.text(RectF(row.r - 460, row.t, row.r - 10, row.b), L"по колега или клиент — записва се в браузъра", 11.5f, P.faint);
-    } else if (x.roleLocked) {
-      ui.glyph(RectF(row.r - 460, row.t, row.r - 436, row.b), kLock, 13.f, P.faint);
-      ui.text(RectF(row.r - 432, row.t, row.r - 10, row.b), L"не е за вашата роля — може само да се изчисти в браузъра", 11.5f, P.faint);
-    } else {
-      ui.textBox(ui.id("din", id), RectF(row.r - 460, row.t + 4, row.r - 372, row.b - 4), dayInput_[id], L"ч:мм");
-      std::wstring noteHint = x.requiresNote ? (x.hint.empty() ? L"коментар (задължителен)" : x.hint) : L"коментар";
-      ui.textBox(ui.id("dnote", id), RectF(row.r - 364, row.t + 4, row.r - 8, row.b - 4), dayNoteIn_[id], noteHint);
+    bool isChanged = changedIds.count(id) > 0;
+    switch (it.k) {
+      case K::Head:
+        ui.text(RectF(row.l + 4, row.t + 6, row.r, row.b + 4), x.name, 13.f, P.text, 700, Align::Left, VAlign::Bottom);
+        break;
+      case K::Row:
+      case K::LineHead: {
+        ui.card(row, 6);
+        if (isChanged) ui.p->rrect(RectF(row.l + 2, row.t + 4, row.l + 6, row.b - 4), 2.f, P.accent);
+        std::wstring name = x.name + (x.isAbsence ? L"  ·  отсъствие" : L"");
+        RectF nameR(row.l + 14, row.t, row.r - 610, row.b);
+        ui.text(nameR, name, 12.5f, P.text);
+        if (!x.hint.empty()) ui.tooltip(nameR, x.hint);
+        int rec = recorded[id];
+        ui.text(RectF(row.r - 606, row.t, row.r - 506, row.b), rec ? L"записано " + hm(rec) : L"", 11.5f, P.dim, 400, Align::Right);
+        if (x.roleLocked) {
+          ui.glyph(RectF(row.r - 496, row.t, row.r - 472, row.b), kLock, 13.f, P.faint);
+          ui.text(RectF(row.r - 468, row.t, row.r - 10, row.b), L"не е за вашата роля — може само да се изчисти в браузъра", 11.5f, P.faint);
+          break;
+        }
+        if (it.k == K::LineHead) {
+          std::wstring who = x.asksColleague && x.clientMode != "none" ? L"по колега и клиент" : x.asksColleague ? L"по колега" : L"по клиент";
+          ui.text(RectF(row.r - 496, row.t, row.r - 140, row.b), L"записва се на редове " + who, 11.5f, P.dim);
+          if (ui.button(ui.id("dladd", id), RectF(row.r - 132, row.t + 5, row.r - 8, row.b - 5), L"+ ред", Btn::Standard, nullptr, !a.dayBusy))
+            addTo = id;
+          break;
+        }
+        if (x.isAbsence) {  // 📅 — the same time on each day of a period
+          bool on = dayRanged_.count(id) > 0;
+          RectF cb(row.r - 500, row.t + 5, row.r - 466, row.b - 5);
+          if (ui.iconButton(ui.id("drng", id), cb, L"\xE787", on ? L"Само за деня" : L"Същото време за всеки ден от период", !a.dayBusy)) {
+            if (on) {
+              dayRanged_.erase(id);
+            } else {
+              dayRanged_.insert(id);
+              if (trim(dayFrom_[id]).empty()) dayFrom_[id] = dmyFromIso(d.date);
+              if (trim(dayTo_[id]).empty()) dayTo_[id] = dmyFromIso(d.date);
+            }
+          }
+          if (on) ui.p->rrectStroke(cb.inset(0.5f), 5, P.accent, 1.5f);
+        }
+        ui.textBox(ui.id("din", id), RectF(row.r - 460, row.t + 4, row.r - 372, row.b - 4), dayInput_[id], L"ч:мм");
+        std::wstring noteHint = x.requiresNote ? (x.hint.empty() ? L"коментар (задължителен)" : x.hint) : L"коментар";
+        ui.textBox(ui.id("dnote", id), RectF(row.r - 364, row.t + 4, row.r - 8, row.b - 4), dayNoteIn_[id], noteHint);
+        break;
+      }
+      case K::Range: {
+        float lx = row.l + 40;
+        ui.text(RectF(lx, row.t, lx + 70, row.b), L"период от", 12.f, P.dim);
+        ui.textBox(ui.id("dfrom", id), RectF(lx + 74, row.t + 4, lx + 194, row.b - 4), dayFrom_[id], L"дд.мм.гггг");
+        ui.text(RectF(lx + 204, row.t, lx + 230, row.b), L"до", 12.f, P.dim);
+        ui.textBox(ui.id("dto", id), RectF(lx + 234, row.t + 4, lx + 354, row.b - 4), dayTo_[id], L"дд.мм.гггг");
+        ui.text(RectF(lx + 366, row.t, row.r - 8, row.b), L"същото време за всеки ден от периода — сървърът решава кои дни", 11.5f, P.faint);
+        break;
+      }
+      case K::Sub: {
+        float lx = row.l + 40;
+        ui.text(RectF(lx, row.t, lx + 110, row.b), L"⮌ заместник", 12.f, P.dim);
+        int idx = indexOf(d.substitutes, daySub_[id]) + 1;
+        if (ui.combo(ui.id("dsub", id), RectF(lx + 114, row.t + 3, lx + 434, row.b - 3), idx, subNames))
+          daySub_[id] = idx > 0 ? d.substitutes[(size_t)idx - 1].id : 0;
+        if (d.substitutes.empty()) ui.text(RectF(lx + 444, row.t, row.r - 8, row.b), L"няма колеги от вашата бизнес линия", 11.5f, P.faint);
+        break;
+      }
+      case K::NoLines:
+        ui.text(RectF(row.l + 40, row.t, row.r, row.b), L"няма редове за деня — „+ ред“ добавя", 11.5f, P.faint);
+        break;
+      case K::Line: {
+        auto& ls = dayLines_[id];
+        if (it.line >= (int)ls.size()) break;
+        DayLineDraft& l = ls[(size_t)it.line];
+        int key = id * 64 + it.line;
+        float lx = row.l + 40;
+        if (x.asksColleague) {
+          int idx = indexOf(d.colleagues, l.colleagueId) + 1;
+          if (ui.combo(ui.id("dlcol", key), RectF(lx, row.t + 3, lx + 220, row.b - 3), idx, colleagueNames))
+            l.colleagueId = idx > 0 ? d.colleagues[(size_t)idx - 1].id : 0;
+          lx += 228;
+        }
+        if (x.clientMode != "none") {
+          bool na = x.clientMode == "or_na";
+          std::vector<std::wstring> names = {L"— изберете клиент —"};
+          if (na) names.push_back(L"неприложимо");
+          for (auto& o : d.clients) names.push_back(o.name + (o.inactive ? L" (неактивен)" : L""));
+          int base = na ? 2 : 1;
+          int idx = l.clientId < 0 ? 1 : l.clientId > 0 ? indexOf(d.clients, l.clientId) + base : 0;
+          if (idx < 0) idx = 0;
+          if (ui.combo(ui.id("dlcli", key), RectF(lx, row.t + 3, lx + 250, row.b - 3), idx, names))
+            l.clientId = idx == 0 ? 0 : (na && idx == 1) ? -1 : d.clients[(size_t)(idx - base)].id;
+          lx += 258;
+        }
+        ui.textBox(ui.id("dlt", key), RectF(lx, row.t + 3, lx + 88, row.b - 3), l.input, L"ч:мм");
+        lx += 96;
+        std::wstring noteHint = x.requiresNote ? (x.hint.empty() ? L"коментар (задължителен)" : x.hint) : L"коментар";
+        ui.textBox(ui.id("dln", key), RectF(lx, row.t + 3, row.r - 44, row.b - 3), l.note, noteHint);
+        if (ui.iconButton(ui.id("dlx", key), RectF(row.r - 38, row.t + 3, row.r - 6, row.b - 3), kClose, L"Махни реда", !a.dayBusy)) {
+          removeAct = id;
+          removeIdx = it.line;
+        }
+        break;
+      }
     }
   }
   ui.endScroll();
+  if (addTo) {
+    const DayActivity* x = act[addTo];
+    DayLineDraft l;
+    if (x && x->clientMode == "or_na") l.clientId = 0;
+    dayLines_[addTo].push_back(l);
+  }
+  if (removeAct && removeIdx >= 0 && removeIdx < (int)dayLines_[removeAct].size())
+    dayLines_[removeAct].erase(dayLines_[removeAct].begin() + removeIdx);
 
-  // the bar
+  // ---- the bar
+  int nChanged = (int)changedIds.size();
   if (!a.dayNote.empty() && nowSec() < a.dayNoteUntil) ui.text(RectF(bar.l + 4, bar.t, bar.l + 300, bar.b), L"✓ " + a.dayNote, 12.5f, green, 600);
   else ui.text(RectF(bar.l + 4, bar.t, bar.r - 420, bar.b), L"Време: 45 = 45 минути, 1:30 = час и половина. Празно — изтрива.", 11.5f, P.faint);
-  std::wstring label = changed.empty() ? L"Няма промени" : L"Запиши промените (" + num((int)changed.size()) + L")";
-  if (ui.button(ui.id("dsave"), RectF(bar.r - 240, bar.t + 4, bar.r, bar.b - 4), label, Btn::Accent, kSave, !changed.empty() && !a.dayBusy))
-    after([changed] { app().saveDay(changed); });
-  if (!changed.empty() && ui.button(ui.id("dundo"), RectF(bar.r - 380, bar.t + 4, bar.r - 248, bar.b - 4), L"Отмени", Btn::Subtle, kClose, !a.dayBusy))
+  std::wstring label = nChanged == 0 ? L"Няма промени" : L"Запиши промените (" + num(nChanged) + L")";
+  if (ui.button(ui.id("dsave"), RectF(bar.r - 240, bar.t + 4, bar.r, bar.b - 4), label, Btn::Accent, kSave, nChanged > 0 && !a.dayBusy))
+    after([rowsOut, setsOut] { app().saveDay(rowsOut, setsOut); });
+  if (nChanged > 0 && ui.button(ui.id("dundo"), RectF(bar.r - 380, bar.t + 4, bar.r - 248, bar.b - 4), L"Отмени", Btn::Subtle, kClose, !a.dayBusy))
     dayFormSeq_ = -1;  // back to what is recorded
 }
 
