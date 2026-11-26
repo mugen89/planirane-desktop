@@ -21,6 +21,7 @@ constexpr const wchar_t* kServer = L"";
 constexpr const wchar_t* kPerson = L"";
 constexpr const wchar_t* kKey = L"";
 constexpr const wchar_t* kDownload = L"\xE896";
+constexpr const wchar_t* kStopwatch = L"\xE916";
 constexpr const wchar_t* kSync = L"\xE895";
 constexpr const wchar_t* kAttach = L"";  // link
 
@@ -72,7 +73,8 @@ bool cardInCell(const Summary& s, const SumCard& k, const std::string& row, cons
 
 // ================================================================ panel
 bool Panel::create(HINSTANCE inst, RECT at) {
-  return createPopup(inst, L"KanbanDesktopPanel", at, WS_EX_TOOLWINDOW | WS_EX_TOPMOST, 3);
+  // Opaque, not acrylic: more contrast (the user, 2026-11-26), and the same ground as the rail beside it.
+  return createPopup(inst, L"KanbanDesktopPanel", at, WS_EX_TOOLWINDOW | WS_EX_TOPMOST, 0);
 }
 
 void Panel::showAt(RECT at) {
@@ -110,7 +112,12 @@ void Panel::paint() {
   // ---- header
   ui.text(RectF(x, y, x + cw - 120, y + 22), L"Контрол на срокове", 15, P.text, 600);
   std::wstring who = a.user.name.empty() ? a.user.username : a.user.name;
-  if (a.summary.loaded) who += (who.empty() ? L"" : L"  ·  ") + a.summary.subviewLabel;
+  std::wstring where = a.tab == App::Tab::Clients    ? L"Клиенти"
+                      : a.tab == App::Tab::AdminDay ? L"Административни дейности"
+                      : a.tab == App::Tab::Profile  ? L"Профил и настройки"
+                      : a.summary.loaded            ? a.summary.subviewLabel
+                                                    : L"";
+  if (!where.empty()) who += (who.empty() ? L"" : L"  ·  ") + where;
   ui.text(RectF(x, y + 22, x + cw - 120, y + 40), who.empty() ? a.api.base : who, 12, P.dim);
   float bx = x + cw - 32;
   if (ui.iconButton(ui.id("signout"), RectF(bx, y + 4, bx + 32, y + 36), kSignOut, L"Изход от профила")) after([] { app().signOut(); });
@@ -127,7 +134,13 @@ void Panel::paint() {
 
   y = paintTimer(RectF(x, y, x + cw, y + 64));
   y = paintUnassigned(RectF(x, y, x + cw, H));
-  paintSummary(RectF(x, y + 10, x + cw, H - 46));
+  RectF content(x, y + 10, x + cw, H - 46);
+  switch (a.tab) {
+    case App::Tab::Clients: paintClients(content); break;
+    case App::Tab::AdminDay: paintAdminDay(content); break;
+    case App::Tab::Profile: paintProfile(content); break;
+    default: paintSummary(content); break;
+  }
 
   // ---- footer: what is going on (update, connection) · the update button · the browser · the version
   const float fy = H - 40, fb = H - 8;
@@ -161,27 +174,31 @@ float Panel::paintTimer(RectF r) {
   const Color green = P.dark ? Color::hex(0x4ADE80) : Color::hex(0x15803D);
   const Color amber = P.dark ? Color::hex(0xFBBF24) : Color::hex(0xB45309);
   bool running = st.hasRunning && !st.running.paused, paused = st.hasRunning && st.running.paused;
+  // Idle, the stopwatch is one slim line: with the table, „Пусни“ on a card is the usual start, and „Без карта“ stays
+  // for work that has no card yet (the user, 2026-11-26: "after adding the summary the stopwatch without an item
+  // becomes a bit useless"). Running, it is the big clock and its buttons.
+  r.b = r.t + (st.hasRunning ? 64.f : 46.f);
   ui.card(r, 10);
-  int secs = a.runningSeconds();
-  ui.text(RectF(r.l + 16, r.t + 6, r.l + 190, r.t + 40), st.hasRunning ? clockText(secs, true) : L"0:00:00", 26,
-          running ? green : paused ? amber : P.faint, 600);
-  std::wstring line = !a.haveState    ? (a.offline ? L"Няма връзка със сървъра" : L"Зарежда…")
-                      : !st.hasRunning ? L"Не тече  ·  днес " + clockText(st.todaySeconds, false) +
-                                           (st.unattributed ? L"  ·  за разпределяне " + num(st.unattributed) : L"")
-                                       : (paused ? L"На пауза  ·  " : L"Тече  ·  ") + what(st.running.cardTitle, st.running.clientName);
-  ui.text(RectF(r.l + 16, r.t + 40, r.r - 390, r.t + 58), line, 11.5f, P.dim);
-  if (running) ui.animating = true;
-
   float bh = 34, by = r.cy() - bh / 2, bw = 116, gap = 8;
   if (!st.hasRunning) {
+    std::wstring line = !a.haveState ? (a.offline ? L"Няма връзка със сървъра" : L"Зарежда…")
+                                     : L"Хронометърът не тече  ·  днес " + clockText(st.todaySeconds, false) +
+                                           (st.unattributed ? L"  ·  за разпределяне " + num(st.unattributed) : L"");
+    ui.glyph(RectF(r.l + 12, r.t, r.l + 36, r.b), kStopwatch, 15.f, P.dim);
+    ui.text(RectF(r.l + 40, r.t, r.r - 170, r.b), line, 12.5f, P.text);
     bool blocked = !st.pending.empty() || (st.maxUnassigned > 0 && st.unattributed >= st.maxUnassigned);
-    RectF b(r.r - 14 - 190, by, r.r - 14, by + bh);
-    if (ui.button(ui.id("start"), b, L"Пусни без карта", Btn::Accent, kPlay, a.haveState && st.canTrack && !a.busy && !blocked))
+    RectF b(r.r - 8 - 146, r.cy() - 15, r.r - 8, r.cy() + 15);
+    if (ui.button(ui.id("start"), b, L"Без карта", Btn::Standard, kPlay, a.haveState && st.canTrack && !a.busy && !blocked))
       after([] { app().startTimer(); });
-    if (blocked)
-      ui.tooltip(b, !st.pending.empty() ? L"Първо решете спряното време (✓ или ✕)."
-                                        : L"Стигнат е таванът на неразпределените записи — разпределете ги (под хронометъра).");
+    ui.tooltip(b, !st.pending.empty() ? L"Първо решете спряното време (✓ или ✕)."
+                  : blocked           ? L"Стигнат е таванът на неразпределените записи — разпределете ги (под хронометъра)."
+                                      : L"Хронометър без карта — картата се избира после: „Закачи“ на картата или „За разпределяне“.");
   } else {
+    int secs = a.runningSeconds();
+    ui.text(RectF(r.l + 16, r.t + 6, r.l + 190, r.t + 40), clockText(secs, true), 26, running ? green : amber, 600);
+    std::wstring line = (paused ? L"На пауза  ·  " : L"Тече  ·  ") + what(st.running.cardTitle, st.running.clientName);
+    ui.text(RectF(r.l + 16, r.t + 40, r.r - 390, r.t + 58), line, 11.5f, P.dim);
+    if (running) ui.animating = true;
     RectF b3(r.r - 14 - bw, by, r.r - 14, by + bh), b2(b3.l - gap - bw, by, b3.l - gap, by + bh), b1(b2.l - gap - bw, by, b2.l - gap, by + bh);
     if (paused) {
       if (ui.button(ui.id("resume"), b1, L"Продължи", Btn::Accent, kPlay, !a.busy)) after([] { app().resumeTimer(); });
@@ -511,6 +528,7 @@ void Panel::paintSummary(RectF area) {
     for (size_t i = 0; i < s.rows.size(); i++) {
       RectF rr(area.l, y + off + i * rh, area.r, y + off + (i + 1) * rh);
       if (rr.b < scrollR.t || rr.t > scrollR.b) continue;
+      if (i % 2 == 1) ui.p->rrect(rr, 4, P.text.withA(P.dark ? 0.035f : 0.03f));  // every other row: easier to follow across
       drawRow(s.rows[i], rr, false, (int)i + 1);
     }
     ui.endScroll();
@@ -540,7 +558,15 @@ void Panel::paintSummary(RectF area) {
     selRow_.clear();
     selCol_.clear();
   }
-  RectF cardsR(list.l, list.t + 28, list.r, list.b);
+  paintCards(RectF(list.l, list.t + 28, list.r, list.b), cards, ui.id("cards"));
+}
+
+// A list of cards: the lane menu, „Пусни“ / „Закачи“ / „Сложи тук“, the period, the urgency bar (days left), and under
+// a card the server's questions (attach form, a refused move, „№ вх. док.“). The table's selection and a client's.
+void Panel::paintCards(RectF cardsR, const std::vector<const SumCard*>& cards, uint32_t scrollId) {
+  App& a = app();
+  const UiPalette& P = ui.pal;
+  const Color green = P.dark ? Color::hex(0x4ADE80) : Color::hex(0x15803D);
   // The collector's lanes, named as on the board. Choosing one moves the card there — the web's move, with its rules.
   static const char* kLaneKeys[] = {"upcoming", "in_progress", "review", "done"};
   static const std::vector<std::wstring> kLaneNames = {L"Предстоящи", L"В процес", L"За одобрение", L"Приключени"};
@@ -559,7 +585,7 @@ void Panel::paintSummary(RectF area) {
   auto heightOf = [&](const SumCard& k) { return 50.f + extraOf(k); };
   float contentH = 0;
   for (auto* k : cards) contentH += heightOf(*k);
-  float coff = ui.beginScroll(ui.id("cards"), cardsR, contentH);
+  float coff = ui.beginScroll(scrollId, cardsR, contentH);
   const TimeState& st = a.st;
   float cy = cardsR.t + coff;
   for (const SumCard* kp : cards) {
@@ -570,15 +596,23 @@ void Panel::paintSummary(RectF area) {
     if (cr.b < cardsR.t || cr.t > cardsR.b) continue;
     ui.card(cr, 8);
     RectF top(cr.l, cr.t, cr.r, cr.t + 46);
-    ui.p->rrect(RectF(top.l + 4, top.t + 6, top.l + 7, top.b - 6), 1.5f, k.closed ? green : statusColor(k.status));
+    // The urgency colour (days left) as a bar the whole height of the card — 7 px, to be seen (the user, 2026-11-26).
+    ui.p->rrect(RectF(cr.l + 2, cr.t + 3, cr.l + 9, cr.b - 3), 3.f, k.closed ? green : statusColorOf(k.status));
     const float textR = k.closed ? top.r - 12 : top.r - 282;
-    ui.text(RectF(top.l + 16, top.t + 3, textR, top.t + 22), k.title, 12.5f, P.text, 600);  // already begins with the activity's code
+    // The period „[10.2026]“ at the right of the title, bold — as on the browser's card; stronger when carried over (⏮).
+    float pw = k.periodTag.empty() ? 0.f : ui.textWidth(k.periodTag, 12.f, 700) + 6;
+    if (pw > 0) {
+      RectF pr(textR - pw, top.t + 3, textR, top.t + 22);
+      ui.text(pr, k.periodTag, 12.f, k.carryOver ? P.text : P.dim, 700, Align::Right);
+      if (!k.periodHint.empty()) ui.tooltip(pr, k.periodHint);
+    }
+    ui.text(RectF(top.l + 20, top.t + 3, textR - pw - 8, top.t + 22), k.title, 12.5f, P.text, 600);  // already begins with the activity's code
     std::wstring sub = k.clientName.empty() ? L"задача" : k.clientName;
     if (!k.dueDate.empty()) sub += L"  ·  срок " + shortDate(k.dueDate);
     if (k.closed) sub += L"  ·  приключена";
     if (!k.worker.empty()) sub += L"  ·  " + k.worker;
     if (k.awaiting) sub += L"  ·  чака одобрение";
-    ui.text(RectF(top.l + 16, top.t + 21, textR, top.b - 3), sub, 11.f, P.dim);
+    ui.text(RectF(top.l + 20, top.t + 21, textR, top.b - 3), sub, 11.f, P.dim);
     if (k.closed) continue;
     int id = k.id;
 
@@ -657,6 +691,14 @@ void Panel::paintSummary(RectF area) {
   if (cards.empty()) ui.text(cardsR, L"Няма карти тук.", 12.f, P.faint, 400, Align::Center, VAlign::Top);
 }
 
+Color Panel::statusColorOf(const std::string& key) {
+  const Summary& s = app().summary;
+  if (auto it = s.bandColors.find(key); it != s.bandColors.end()) return it->second;
+  for (auto& c : s.layout)
+    if (c.key == "status:" + key && c.hasColor) return c.color;
+  return ui.pal.faint;
+}
+
 // The views of the table, as the web's bar above the board: the executor's („Изп.") first, then the managing
 // partner's („УС"). Words instead of the web's icons — the panel is wide enough, and words need no tooltip to be read.
 float Panel::paintViews(RectF r) {
@@ -712,6 +754,67 @@ float Panel::paintViews(RectF r) {
     }
   }
   return r.b;
+}
+
+// ================================================================ the rail
+bool Rail::create(HINSTANCE inst, RECT at) {
+  return createPopup(inst, L"KanbanDesktopRail", at, WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE, 0);
+}
+
+void Rail::showAt(RECT at) {
+  SetWindowPos(hwnd_, HWND_TOPMOST, at.left, at.top, at.right - at.left, at.bottom - at.top, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+  invalidate();
+}
+
+bool Rail::onClose() {
+  app().hidePanel();
+  return false;
+}
+
+LRESULT Rail::onMessage(UINT m, WPARAM, LPARAM, bool& handled) {
+  if (m == WM_MOUSEACTIVATE) {  // clicks, but no activation: the panel keeps it, and stays open
+    handled = true;
+    return MA_NOACTIVATE;
+  }
+  handled = false;
+  return 0;
+}
+
+void Rail::paint() {
+  App& a = app();
+  const UiPalette& P = ui.pal;
+  const float W = ui.view.w();
+  struct Item {
+    App::Tab tab;
+    const wchar_t* icon;
+    const wchar_t* label;
+  };
+  static const Item kItems[] = {
+      {App::Tab::Table, L"\xE8FD", L"Таблица"},
+      {App::Tab::Clients, L"\xE716", L"Клиенти"},
+      {App::Tab::AdminDay, L"\xE823", L"Админ. дейности"},
+      {App::Tab::Profile, L"\xE77B", L"Профил"},
+  };
+  float y = 12;
+  int i = 0;
+  for (auto& it : kItems) {
+    RectF b(6, y, W - 6, y + 72);
+    bool on = a.tab == it.tab;
+    bool hot = ui.hot(b);
+    if (on) {
+      ui.p->rrect(b, 8, P.accent.withA(P.dark ? 0.22f : 0.14f));
+      ui.p->rrect(RectF(b.l, b.t + 14, b.l + 3, b.b - 14), 1.5f, P.accent);
+    } else if (hot) {
+      ui.p->rrect(b, 8, P.text.withA(0.06f));
+    }
+    Color fg = on ? (P.dark ? P.accent : mix(P.accent, P.text, 0.15f)) : P.text;
+    ui.glyph(RectF(b.l, b.t + 8, b.r, b.t + 32), it.icon, 18.f, fg);
+    ui.text(RectF(b.l + 2, b.t + 34, b.r - 2, b.b), it.label, 11.f, fg, on ? 600 : 400, Align::Center, VAlign::Top, true);  // two lines
+    if (hot && !on) ui.cursor = LoadCursorW(nullptr, IDC_HAND);
+    App::Tab t = it.tab;
+    if (ui.press(ui.id("tab", i++), b) && !on) after([t] { app().setTab(t); });
+    y = b.b + 6;
+  }
 }
 
 // ================================================================ sign-in

@@ -94,6 +94,79 @@ SumRow parseRow(const Json& j) {
 }
 }  // namespace
 
+namespace {
+DayActivity parseActivity(const Json& n) {
+  DayActivity a;
+  a.id = num(n, "id");
+  a.name = wstr(n, "name");
+  a.hint = wstr(n, "hint");
+  a.acceptsTime = n.flag("acceptsTime", false);
+  a.requiresNote = n.flag("requiresNote", false);
+  a.isAbsence = n.flag("isAbsence", false);
+  a.roleLocked = n.flag("roleLocked", false);
+  std::string mode = n.str("clientMode");
+  a.lines = n.flag("asksColleague", false) || (!mode.empty() && mode != "none");
+  if (auto c = n.find("children"); c && c->isArr())
+    for (auto& x : c->a)
+      if (x.flag("isActive", true)) a.children.push_back(parseActivity(x));
+  return a;
+}
+}  // namespace
+
+AdminDay parseDay(const Json& j) {
+  AdminDay d;
+  d.date = j.str("date");
+  d.loaded = !d.date.empty();
+  if (auto t = j.find("activities"); t && t->isArr())
+    for (auto& n : t->a)
+      if (n.flag("isActive", true)) d.activities.push_back(parseActivity(n));
+  if (auto e = j.find("entries"); e && e->isArr())
+    for (auto& x : e->a) d.entries.push_back({num(x, "activityId"), num(x, "seconds"), wstr(x, "note")});
+  if (auto c = j.find("collectors"); c && c->isObj()) {
+    d.adminSeconds = num(*c, "adminSeconds");
+    d.nonWorkingSeconds = num(*c, "nonWorkingSeconds");
+    d.cardSeconds = num(*c, "cardSeconds");
+    d.totalSeconds = num(*c, "totalSeconds");
+  }
+  return d;
+}
+
+std::vector<ClientRow> parseClients(const Json& j) {
+  std::vector<ClientRow> out;
+  if (!j.isArr()) return out;
+  for (auto& c : j.a) {
+    ClientRow r;
+    r.id = num(c, "id");
+    r.name = wstr(c, "name");
+    r.identifier = wstr(c, "identifier");
+    r.complexity = wstr(c, "complexity_label");
+    if (auto p = c.find("autonomy_pct"); p && p->t == Json::T::Num) r.autonomy = (int)p->n;
+    r.owner = wstr(c, "owner_name");
+    r.partner = wstr(c, "partner_name");
+    r.deadlines = num(c, "deadline_count");
+    r.active = c.flag("is_active", true);
+    if (auto l = c.find("setup_lines"); l && l->isArr())
+      for (auto& x : l->a) r.lines.push_back({wstr(x, "department"), x.flag("ok", false)});
+    out.push_back(std::move(r));
+  }
+  return out;
+}
+
+Me parseMe(const Json& j) {
+  Me m;
+  m.loaded = j.isObj();
+  m.name = wstr(j, "name");
+  m.username = wstr(j, "username");
+  m.email = wstr(j, "email");
+  m.jobTitle = wstr(j, "job_title");
+  m.department = wstr(j, "department_name");
+  m.mobile = wstr(j, "mobile_phone");
+  m.internalPhone = wstr(j, "internal_phone");
+  if (auto t = j.find("teams"); t && t->isArr())
+    for (auto& x : t->a) m.teams.push_back(wstr(x, "name"));
+  return m;
+}
+
 AttachNeeds parseAttachNeeds(const Json& j, const std::wstring& fallback) {
   AttachNeeds n;
   n.code = j.str("error");
@@ -136,6 +209,9 @@ Summary parseSummary(const Json& j) {
       }
       s.layout.push_back(std::move(col));
     }
+  if (auto cs = j.find("columns"); cs && cs->isArr())
+    for (auto& c : cs->a)
+      if (auto h = c.find("color"); h && h->t == Json::T::Str) s.bandColors[c.str("key")] = hexColor(h->s);
   if (auto v = j.find("subviews"); v && v->isArr())
     for (auto& x : v->a) s.subviews.push_back({x.str("id"), x.str("set"), wstr(x, "label")});
   if (auto rows = j.find("rows"); rows && rows->isArr())
@@ -154,6 +230,12 @@ Summary parseSummary(const Json& j) {
       k.status = c.str("status");
       k.row = c.str("row");
       k.laneKey = c.str("laneKey");
+      k.clientId = num(c, "clientId");
+      if (auto p = c.find("period"); p && p->isObj()) {
+        k.periodTag = wstr(*p, "tag");
+        k.periodHint = wstr(*p, "hint");
+        k.carryOver = p->flag("carryOver", false);
+      }
       k.title = wstr(c, "title");
       k.clientName = wstr(c, "clientName");
       k.obligationCode = wstr(c, "obligationCode");

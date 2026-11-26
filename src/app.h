@@ -12,6 +12,7 @@
 namespace kd {
 
 class Panel;
+class Rail;
 
 // Why the server refused to move a card (POST /collector/cards/:id/move answered 4xx) — shown under the card.
 struct CardProblem {
@@ -71,6 +72,32 @@ class App {
   // Another view of the table. Remembered on the server for the person, as the web does (PATCH /me/view
   // boardSubview), so the browser opens on it too; until that is stored it is asked for with ?subview=.
   void chooseSubview(const std::string& id);
+
+  // The tabs on the rail left of the panel (the user's sketch, 2026-11-26).
+  enum class Tab { Table, Clients, AdminDay, Profile };
+  Tab tab = Tab::Table;
+  void setTab(Tab t);
+  // „Административни дейности“: one day, as GET /time/day gives it; saved with POST /time/day (only the rows sent).
+  struct DayRowIn {
+    int activityId = 0;
+    std::wstring input, note;
+  };
+  AdminDay day;
+  int daySeq = 0;  // a new answer from the server: the form re-reads it
+  bool dayBusy = false;
+  std::wstring dayError, dayNote;
+  double dayNoteUntil = 0;
+  void loadDay(const std::string& date = {});  // today when empty
+  void saveDay(const std::vector<DayRowIn>& rows);
+  // Клиенти
+  std::vector<ClientRow> clients;
+  bool clientsLoaded = false, clientsBusy = false;
+  std::wstring clientsError;
+  void loadClients();
+  // Профил
+  Me me;
+  void loadMe();
+  void setPillOn(bool on);
   // „За разпределяне“: an entry is picked (armed) under the stopwatch, then a card in the table takes it — „Сложи тук“.
   // The browser has no screen for this any more (its time pane went on 2026-09-08), so the desktop is where it is done.
   void armEntry(int entryId);  // 0 = none
@@ -128,7 +155,8 @@ class App {
   double nextUpdateCheck_ = 0;
   double summaryAt_ = 0;
   bool summaryAgain_ = false;  // asked for while one was on its way (e.g. right after a move): once more when it lands
-  RECT panelRect(float& scale);  // above the taskbar button, almost as tall as the work area
+  RECT panelRect(float& scale, RECT* rail = nullptr);  // above the taskbar button, almost as tall as the work area; the rail left of it
+  std::unique_ptr<Rail> rail_;
   double panelHiddenAt_ = 0;  // a click on the tray icon first closes the flyout; it must not reopen it
   int stateSeq_ = 0;          // answers older than the newest request are ignored
 };

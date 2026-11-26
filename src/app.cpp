@@ -299,6 +299,32 @@ void App::command(const std::wstring& c) {
       std::wstring lane = rest.substr(p1 + 1, p2 == std::wstring::npos ? std::wstring::npos : p2 - p1 - 1);
       moveCard(_wtoi(rest.substr(0, p1).c_str()), narrow(lane), p2 == std::wstring::npos ? std::wstring() : rest.substr(p2 + 1));
     }
+  } else if (c.rfind(L"tab:", 0) == 0) {  // tab:table|clients|day|profile — what a tab on the rail does
+    std::wstring t = c.substr(4);
+    setTab(t == L"clients" ? Tab::Clients : t == L"day" ? Tab::AdminDay : t == L"profile" ? Tab::Profile : Tab::Table);
+  } else if (c.rfind(L"daydate:", 0) == 0) {  // daydate:<YYYY-MM-DD> — the day stepper
+    loadDay(narrow(c.substr(8)));
+  } else if (c.rfind(L"dayset:", 0) == 0) {  // dayset:<activity>:<time>[:<comment>] — one row of the day, saved
+    std::wstring rest = c.substr(7);
+    size_t p1 = rest.find(L':');
+    if (p1 != std::wstring::npos) {
+      size_t p2 = rest.find(L':', p1 + 1);
+      DayRowIn row;
+      row.activityId = _wtoi(rest.substr(0, p1).c_str());
+      row.input = rest.substr(p1 + 1, p2 == std::wstring::npos ? std::wstring::npos : p2 - p1 - 1);
+      if (p2 != std::wstring::npos) row.note = rest.substr(p2 + 1);
+      saveDay({row});
+    }
+  } else if (c.rfind(L"railshot:", 0) == 0) {  // railshot:<png> — the rail drawn off screen at its real size
+    if (gfx().ensure()) {
+      Rail shot;
+      float s = 1;
+      RECT railAt{};
+      panelRect(s, &railAt);
+      int w = (int)((railAt.right - railAt.left) / s), h = (int)((railAt.bottom - railAt.top) / s);
+      auto target = gfx().target(w, h);
+      if (target && shot.renderTo(target.Get(), w, h, 3, !systemUsesLightTheme())) savePng(target.Get(), c.substr(9));
+    }
   } else if (c.rfind(L"arm:", 0) == 0) {  // arm:<entry> — „Избери карта“ on a „за разпределяне“ entry (0: cancel)
     armEntry(_wtoi(c.substr(4).c_str()));
   } else if (c.rfind(L"attach:", 0) == 0) {  // attach:<entry>:<card>[:<option ids, comma>] — „Сложи тук“ / the form's „Сложи“
@@ -421,6 +447,11 @@ void App::signOut() {
   attachProblems.clear();
   attachingCards.clear();
   pendingNeeds.clear();
+  day = {};
+  clients.clear();
+  clientsLoaded = false;
+  me = {};
+  tab = Tab::Table;
   error.clear();
   stateSeq_++;
   updatePill();
@@ -444,6 +475,11 @@ void App::sessionLost() {
   attachProblems.clear();
   attachingCards.clear();
   pendingNeeds.clear();
+  day = {};
+  clients.clear();
+  clientsLoaded = false;
+  me = {};
+  tab = Tab::Table;
   stateSeq_++;
   hidePanel();
   updatePill();
@@ -575,6 +611,109 @@ void App::chooseSubview(const std::string& id) {
     if (!r.ok()) logf("view: %s not stored (%d)", id.c_str(), r.status);
   });
   refreshSummary();
+  if (panel_) panel_->invalidate();
+}
+
+void App::setTab(Tab t) {
+  tab = t;
+  if (t == Tab::Clients && !clientsBusy) loadClients();
+  if (t == Tab::AdminDay) loadDay(day.date);
+  if (t == Tab::Profile) loadMe();
+  if (panel_) panel_->invalidate();
+  if (rail_) rail_->invalidate();
+}
+
+void App::loadDay(const std::string& date) {
+  if (!signedIn || dayBusy) return;
+  dayBusy = true;
+  dayError.clear();
+  api.send(L"GET", "/api/time/day" + (date.empty() ? std::string() : "?date=" + date), nullptr, [this](const Reply& r) {
+    dayBusy = false;
+    if (r.status == 401) {
+      sessionLost();
+      return;
+    }
+    if (r.ok()) {
+      day = parseDay(r.json);
+      daySeq++;
+    } else {
+      dayError = r.error;
+    }
+    if (panel_) panel_->invalidate();
+  });
+}
+
+void App::saveDay(const std::vector<DayRowIn>& rows) {
+  if (!signedIn || dayBusy || rows.empty() || day.date.empty()) return;
+  Json b = Json::object();
+  b.set("date", day.date);
+  Json arr = Json::array();
+  for (auto& r : rows) {
+    Json x = Json::object();
+    x.set("activityId", r.activityId);
+    x.set("input", narrow(trim(r.input)));
+    x.set("note", narrow(trim(r.note)));
+    arr.push(x);
+  }
+  b.set("rows", arr);
+  dayBusy = true;
+  dayError.clear();
+  if (panel_) panel_->invalidate();
+  api.send(L"POST", "/api/time/day", &b, [this](const Reply& r) {
+    dayBusy = false;
+    if (r.status == 401) {
+      sessionLost();
+      return;
+    }
+    if (r.ok()) {
+      day = parseDay(r.json);  // the same answer as GET: the day as the server now has it
+      daySeq++;
+      dayNote = L"Записано.";
+      dayNoteUntil = nowSec() + 5;
+      refresh();  // today's total on the stopwatch strip
+    } else {
+      dayError = r.error;  // the server's sentence: a comment required, a day outside the window, a role…
+    }
+    if (panel_) panel_->invalidate();
+  });
+}
+
+void App::loadClients() {
+  if (!signedIn || clientsBusy) return;
+  clientsBusy = true;
+  clientsError.clear();
+  api.send(L"GET", "/api/clients", nullptr, [this](const Reply& r) {
+    clientsBusy = false;
+    if (r.status == 401) {
+      sessionLost();
+      return;
+    }
+    if (r.ok()) {
+      clients = parseClients(r.json);
+      clientsLoaded = true;
+    } else {
+      clientsError = r.error;
+    }
+    if (panel_) panel_->invalidate();
+  });
+}
+
+void App::loadMe() {
+  if (!signedIn) return;
+  api.send(L"GET", "/api/me", nullptr, [this](const Reply& r) {
+    if (r.status == 401) {
+      sessionLost();
+      return;
+    }
+    if (r.ok()) me = parseMe(r.json);
+    if (panel_) panel_->invalidate();
+  });
+}
+
+void App::setPillOn(bool on) {
+  cfg.pill = on;
+  cfg.save();
+  pill_.setEnabled(on);
   if (panel_) panel_->invalidate();
 }
 
@@ -730,7 +869,8 @@ void App::togglePanel() {
   }
   if (nowSec() - panelHiddenAt_ < 0.35) return;  // that same click just closed it
   float s = 1;
-  RECT at = panelRect(s);
+  RECT railAt{};
+  RECT at = panelRect(s, &railAt);
   if (!panel_) {
     panel_ = std::make_unique<Panel>();
     if (!panel_->create(inst_, at)) {
@@ -739,14 +879,20 @@ void App::togglePanel() {
     }
   }
   panel_->showAt(at);
+  if (!rail_) {
+    rail_ = std::make_unique<Rail>();
+    if (!rail_->create(inst_, railAt)) rail_.reset();
+  }
+  if (rail_) rail_->showAt(railAt);  // never activated: a click on it leaves the panel open
   refresh();
   refreshSummary();
+  setTab(tab);  // the open tab's data, fresh
 }
 
 // Above the taskbar button, right edges aligned, like Windows' own flyouts: wide enough for the summary table and
 // almost as tall as the screen (the person's wish — the table and its cards need the room); never more than the
 // work area.
-RECT App::panelRect(float& s) {
+RECT App::panelRect(float& s, RECT* railOut) {
   RECT anchor = pill_.shown() ? pill_.rect() : RECT{};
   TaskbarInfo t = queryTaskbar();
   s = t.ok ? t.scale : 1.f;
@@ -754,18 +900,26 @@ RECT App::panelRect(float& s) {
   mi.cbSize = sizeof mi;
   GetMonitorInfoW(t.mon ? t.mon : MonitorFromWindow(hwnd_, MONITOR_DEFAULTTOPRIMARY), &mi);
   int m = (int)(12 * s);
-  // 1040: the widest table (by client, for a partner: 11 number columns) and still room for a firm's name.
-  int w = std::min<int>((int)(1040 * s), mi.rcWork.right - mi.rcWork.left - 2 * m);
+  int railW = (int)(Rail::kWidth * s), gap = (int)(10 * s);  // the rail stands a little apart (the user's sketch)
   int h = mi.rcWork.bottom - mi.rcWork.top - 2 * m;
+  int top = mi.rcWork.top + m;
   int right = pill_.shown() ? anchor.right : mi.rcWork.right - m;
-  int bottom = mi.rcWork.bottom - m;
-  RECT at{std::max<LONG>(mi.rcWork.left + m, right - w), std::max<LONG>(mi.rcWork.top + m, bottom - h), 0, 0};
-  at.right = at.left + w;
-  at.bottom = at.top + h;
+  RECT at{};
+  if (right - (mi.rcWork.left + m) - railW - gap >= (int)(700 * s)) {
+    // Right edges aligned with the taskbar button, like Windows' own flyouts; the rail to the left of the panel.
+    int w = std::min<int>((int)(1040 * s), right - (mi.rcWork.left + m) - railW - gap);
+    at = RECT{right - w, top, right, top + h};
+  } else {
+    // The button is near the left edge (a centred taskbar keeps Widgets there): rail and panel from the left.
+    int left = mi.rcWork.left + m + railW + gap;
+    at = RECT{left, top, left + std::min<int>((int)(1040 * s), mi.rcWork.right - m - left), top + h};
+  }
+  if (railOut) *railOut = RECT{at.left - gap - railW, at.top, at.left - gap, at.bottom};
   return at;
 }
 
 void App::hidePanel() {
+  if (rail_ && rail_->visible()) ShowWindow(rail_->hwnd(), SW_HIDE);
   if (panel_ && panel_->visible()) {
     ShowWindow(panel_->hwnd(), SW_HIDE);
     panelHiddenAt_ = nowSec();
@@ -881,11 +1035,7 @@ void App::trayMenu(POINT at) {
       refreshSummary();
       break;
     case kMenuBrowser: openBrowser(); break;
-    case kMenuPill:
-      cfg.pill = !cfg.pill;
-      cfg.save();
-      pill_.setEnabled(cfg.pill);
-      break;
+    case kMenuPill: setPillOn(!cfg.pill); break;
     case kMenuSignIn: showLogin(); break;
     case kMenuSignOut: signOut(); break;
     case kMenuQuit: quit(); break;
@@ -907,6 +1057,11 @@ void App::tick() {
   }
   if (signedIn && nowSec() - lastPoll_ >= kPollEvery) refresh();
   if (signedIn && panel_ && panel_->visible() && nowSec() - summaryAt_ >= 60) refreshSummary();  // while someone looks
+  if (dayNoteUntil > 0 && nowSec() >= dayNoteUntil) {
+    dayNoteUntil = 0;
+    dayNote.clear();
+    if (panel_) panel_->invalidate();
+  }
   if (attachNoteUntil > 0 && nowSec() >= attachNoteUntil) {  // „✓ Закачено …“ has been read
     attachNoteUntil = 0;
     attachNote.clear();
@@ -928,6 +1083,7 @@ void App::tick() {
   } else if (nowSec() - hiddenSince > kReleaseAfter) {
     hiddenSince = 0;
     panel_.reset();
+    rail_.reset();
     if (signedIn) login_.reset();
     gfx().release();
     SetProcessWorkingSetSizeEx(GetCurrentProcess(), (SIZE_T)-1, (SIZE_T)-1, 0);

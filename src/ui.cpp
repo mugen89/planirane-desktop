@@ -13,13 +13,14 @@ UiPalette makePalette(bool dark, Color accent) {
   if (dark) {
     q.bg = Color::hex(0x1B1C20);
     q.panel = Color(1, 1, 1, 0.035f);
-    q.card = Color(1, 1, 1, 0.050f);
-    q.cardHover = Color(1, 1, 1, 0.085f);
-    q.stroke = Color(1, 1, 1, 0.075f);
-    q.strokeStrong = Color(1, 1, 1, 0.16f);
-    q.text = Color(1, 1, 1, 0.96f);
-    q.dim = Color(1, 1, 1, 0.62f);
-    q.faint = Color(1, 1, 1, 0.40f);
+    // More contrast than Radial's (the user, 2026-11-26): solid cards with a visible edge, darker secondary text.
+    q.card = Color(1, 1, 1, 0.075f);
+    q.cardHover = Color(1, 1, 1, 0.11f);
+    q.stroke = Color(1, 1, 1, 0.12f);
+    q.strokeStrong = Color(1, 1, 1, 0.24f);
+    q.text = Color(1, 1, 1, 0.98f);
+    q.dim = Color(1, 1, 1, 0.74f);
+    q.faint = Color(1, 1, 1, 0.52f);
     q.control = Color(1, 1, 1, 0.065f);
     q.controlHover = Color(1, 1, 1, 0.10f);
     q.controlDown = Color(1, 1, 1, 0.04f);
@@ -33,13 +34,14 @@ UiPalette makePalette(bool dark, Color accent) {
   } else {
     q.bg = Color::hex(0xF4F5F8);
     q.panel = Color(1, 1, 1, 0.42f);
-    q.card = Color(1, 1, 1, 0.74f);
-    q.cardHover = Color(1, 1, 1, 0.98f);
-    q.stroke = Color(0, 0, 0, 0.070f);
-    q.strokeStrong = Color(0, 0, 0, 0.15f);
-    q.text = Color(0.07f, 0.08f, 0.10f, 0.96f);
-    q.dim = Color(0.07f, 0.08f, 0.10f, 0.64f);
-    q.faint = Color(0.07f, 0.08f, 0.10f, 0.42f);
+    // More contrast than Radial's (the user, 2026-11-26): solid cards with a visible edge, darker secondary text.
+    q.card = Color(1, 1, 1, 0.94f);
+    q.cardHover = Color(1, 1, 1, 1.f);
+    q.stroke = Color(0, 0, 0, 0.11f);
+    q.strokeStrong = Color(0, 0, 0, 0.24f);
+    q.text = Color(0.04f, 0.05f, 0.07f, 1.f);
+    q.dim = Color(0.04f, 0.05f, 0.07f, 0.76f);
+    q.faint = Color(0.04f, 0.05f, 0.07f, 0.56f);
     q.control = Color(1, 1, 1, 0.80f);
     q.controlHover = Color(0.97f, 0.975f, 0.985f, 1.f);
     q.controlDown = Color(0.94f, 0.945f, 0.955f, 1.f);

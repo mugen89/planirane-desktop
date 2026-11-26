@@ -48,6 +48,7 @@ most once a day.
 
 | | |
 |---|---|
+| The rail left of the panel | Tabs: Таблица · Клиенти · Админ. дейности · Профил. It never takes the keyboard, so a click on it leaves the panel open |
 | Click the stopwatch on the taskbar | The panel: the stopwatch (start, pause, resume, stop, cancel; stopped time waits for ✓ / ✕) and the unified board's summary table |
 | The views above the table | The same views as in the browser („Изп.“ / „УС“, as your role allows). The choice is remembered on the server for you, so the browser opens on it too |
 | Click a row or a number in the table | The table collapses to that row and its cards take the room (the name again, or ✕, brings the table back); „Пусни“ starts the stopwatch on a card, „Закачи“ moves a running stopwatch onto it |
@@ -63,7 +64,7 @@ only a few such entries at a time (Админ setting „максимум нер
 
 Command line (talks to the copy already running): `KanbanDesktop.exe --panel | --hide | --start | --pause |
 --resume | --stop | --cancel | --refresh | --update | --signin | --signout | --quit`; for tests, what a click does:
-`--select:<row>[:<column>]` (the table), `--view:<id>` (a view above it), `--arm:<entry>` / `--attach:<entry>:<card>[:<option ids>]` („Избери карта“ / „Сложи тук“), `--confirm:<entry>[:<option ids>]` (✓), `--move:<card>:<lane>[:<№ вх. док.>]` (a card's
+`--select:<row>[:<column>]` (the table), `--view:<id>` (a view above it), `--arm:<entry>` / `--attach:<entry>:<card>[:<option ids>]` („Избери карта“ / „Сложи тук“), `--confirm:<entry>[:<option ids>]` (✓), `--tab:table|clients|day|profile`, `--daydate:<YYYY-MM-DD>`, `--dayset:<activity>:<minutes>[:<comment>]` (one row of „Админ. дейности“, saved), `--railshot:<file.png>` (the rail off screen), `--move:<card>:<lane>[:<№ вх. док.>]` (a card's
 lane menu), and `--shot:<file.png>[|<row>[|<column>]]` (the panel drawn off screen at its real size).
 
 Settings live in `%APPDATA%\KanbanDesktop` (`config.json`, `session.dat`). `KANBANDESKTOP_DATA` points a copy at

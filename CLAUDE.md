@@ -15,6 +15,9 @@ Guidance for Claude Code in this repository: **Kanban Desktop**, the Windows com
 - **Card moves are the web's own move** (`POST /collector/cards/:id/move`). The server's refusal (`422`, `error` +
   `message`) decides what the card shows: `reference_required` → a „№ вх. док.“ field under it; anything else → the
   message and „Отвори в браузъра“. Never pre-check a rule here.
+- **The rail never activates.** The panel hides when it loses activation (a click elsewhere); the rail beside it is
+  `WS_EX_NOACTIVATE` and answers `WM_MOUSEACTIVATE` with `MA_NOACTIVATE`. Anything clickable next to the panel must do
+  the same, or a click on it closes the panel.
 - **„За разпределяне“ lives here.** The browser has had no screen for attaching time without a card since its time pane
   went (2026-09-08); a stopwatch started here without a card can only get its card here. Keep it working.
 - **Test writes on a scratch copy, not on :8106.** Moves write card history and close cards; a view change writes the

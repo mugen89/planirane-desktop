@@ -71,10 +71,12 @@ struct SumRow {
   std::wstring autonomyWindow, autonomyRange, autonomyHint;  // the window it falls in ("75%", "75–95") and its text
 };
 struct SumCard {
-  int id = 0, boardId = 0, normSeconds = 0;
+  int id = 0, boardId = 0, normSeconds = 0, clientId = 0;
   bool hasClient = false, awaiting = false, closed = false;
   std::string status, row;
   std::string laneKey;  // upcoming / in_progress / review / done — what POST /collector/cards/:id/move takes
+  std::wstring periodTag, periodHint;  // „[10.2026]“, „⏮ [09.2026]“, „[10.2026][44]“ — the browser card's, as the server writes it
+  bool carryOver = false;              // from an earlier period (⏮): the browser shows its tag stronger
   std::wstring title, clientName, obligationCode, dueDate, lane, worker;
 };
 // A view of the unified board this person may open (the web's subview bar): ex-clients, mp-people, …
@@ -91,6 +93,7 @@ struct Summary {
   SumRow total;
   std::vector<SumCard> cards;
   std::vector<SubviewTab> subviews;  // only those with a table
+  std::map<std::string, rt::Color> bandColors;  // urgency band key → its colour (`columns`), for the bar on every card
 };
 Summary parseSummary(const rt::Json& j);
 
@@ -112,6 +115,48 @@ struct AttachNeeds {
   std::wstring activity, comment;   // the same: what the server has / what the person typed
 };
 AttachNeeds parseAttachNeeds(const rt::Json& j, const std::wstring& fallback);
+
+// „Административни дейности и неработно време“ for one day — GET /time/day; POST /time/day answers the same.
+struct DayActivity {
+  int id = 0;
+  std::wstring name, hint;
+  bool acceptsTime = false, requiresNote = false, isAbsence = false, roleLocked = false;
+  bool lines = false;  // asks for a colleague or a client: lines per day, done in the browser for now
+  std::vector<DayActivity> children;
+};
+struct DayEntry {
+  int activityId = 0, seconds = 0;
+  std::wstring note;
+};
+struct AdminDay {
+  bool loaded = false;
+  std::string date;  // "2026-11-26"
+  std::vector<DayActivity> activities;  // the roots, each with its children
+  std::vector<DayEntry> entries;
+  int adminSeconds = 0, nonWorkingSeconds = 0, cardSeconds = 0, totalSeconds = 0;
+};
+AdminDay parseDay(const rt::Json& j);
+
+// The client list — GET /clients, what the browser's „Клиенти“ reads (its visibility, the first line in scope).
+struct ClientLine {
+  std::wstring name;
+  bool ok = false;  // set up on this business line (green) — or not yet (orange)
+};
+struct ClientRow {
+  int id = 0, deadlines = 0, autonomy = -1;
+  bool active = true;
+  std::wstring name, identifier, complexity, owner, partner;
+  std::vector<ClientLine> lines;
+};
+std::vector<ClientRow> parseClients(const rt::Json& j);
+
+// The person — GET /me.
+struct Me {
+  bool loaded = false;
+  std::wstring name, username, email, jobTitle, department, mobile, internalPhone;
+  std::vector<std::wstring> teams;
+};
+Me parseMe(const rt::Json& j);
 
 struct Reply {
   int status = 0;         // 0: the server was not reached
