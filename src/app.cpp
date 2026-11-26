@@ -1,5 +1,11 @@
 #include "app.h"
 
+namespace kd {
+namespace {
+void putAnswer(rt::Json& b, const AttachNeeds* answer);
+}
+}  // namespace kd
+
 #include <algorithm>
 
 #include "gfx.h"
@@ -317,6 +323,24 @@ void App::command(const std::wstring& c) {
         attachEntry(entry, card, &answer);
       }
     }
+  } else if (c.rfind(L"confirm:", 0) == 0) {  // confirm:<entry>[:<option ids, comma>] — ✓ on stopped time (and its form)
+    std::wstring rest = c.substr(8);
+    size_t p1 = rest.find(L':');
+    int entry = _wtoi(rest.substr(0, p1).c_str());
+    if (p1 == std::wstring::npos) {
+      confirmPending(entry);
+    } else {
+      AttachNeeds answer;
+      std::wstring ids = rest.substr(p1 + 1);
+      for (size_t at = 0; at < ids.size();) {
+        size_t comma = ids.find(L',', at);
+        std::wstring one = ids.substr(at, comma == std::wstring::npos ? std::wstring::npos : comma - at);
+        if (!one.empty()) answer.chosen.push_back(_wtoi(one.c_str()));
+        if (comma == std::wstring::npos) break;
+        at = comma + 1;
+      }
+      confirmPending(entry, &answer);
+    }
   } else if (c.rfind(L"view:", 0) == 0) {  // view:<id> — what a tab above the table does
     chooseSubview(narrow(c.substr(5)));
   } else if (c.rfind(L"select:", 0) == 0 && panel_) {  // select:<row>[:<column>] — the panel's row / cell, as a click would
@@ -396,6 +420,7 @@ void App::signOut() {
   armedEntry = 0;
   attachProblems.clear();
   attachingCards.clear();
+  pendingNeeds.clear();
   error.clear();
   stateSeq_++;
   updatePill();
@@ -418,6 +443,7 @@ void App::sessionLost() {
   armedEntry = 0;
   attachProblems.clear();
   attachingCards.clear();
+  pendingNeeds.clear();
   stateSeq_++;
   hidePanel();
   updatePill();
@@ -445,6 +471,10 @@ void App::refresh() {
         armedEntry = 0;
         attachProblems.clear();
       }
+      // ✓ done elsewhere (the browser), or ✕: the question under the stopwatch has no subject any more.
+      for (auto it = pendingNeeds.begin(); it != pendingNeeds.end();)
+        it = std::any_of(st.pending.begin(), st.pending.end(), [&](const Pending& p) { return p.id == it->first; }) ? std::next(it)
+                                                                                                                   : pendingNeeds.erase(it);
       if (!user.id) {
         api.session([this](const Reply& rs, const User& u) {
           if (rs.ok() && u.id) {
@@ -558,15 +588,7 @@ void App::attachEntry(int entryId, int cardId, const AttachNeeds* answer) {
   if (!signedIn || entryId <= 0 || cardId <= 0 || attachingCards.count(cardId)) return;
   Json b = Json::object();
   b.set("cardId", cardId);
-  if (answer) {
-    if (!trim(answer->activity).empty()) b.set("activity", narrow(trim(answer->activity)));
-    if (!trim(answer->comment).empty()) b.set("comment", narrow(trim(answer->comment)));
-    if (!answer->options.empty() || !answer->chosen.empty()) {
-      Json ids = Json::array();
-      for (int id : answer->chosen) ids.push(id);
-      b.set("optionIds", ids);
-    }
-  }
+  putAnswer(b, answer);
   int secs = 0;
   for (auto& u : st.unassigned)
     if (u.id == entryId) secs = u.seconds;
@@ -646,7 +668,49 @@ void App::pauseTimer() { action(L"POST", "/api/time/pause", nullptr); }
 void App::resumeTimer() { action(L"POST", "/api/time/resume", nullptr); }
 void App::stopTimer() { action(L"POST", "/api/time/stop", nullptr); }
 void App::cancelTimer() { action(L"DELETE", "/api/time/running", nullptr); }
-void App::confirmPending(int id) { action(L"POST", "/api/time/entries/" + std::to_string(id) + "/confirm", nullptr); }
+namespace {
+// The answer to a 422 time_detail_required, in the body: the choice and/or Дейност + Коментар.
+void putAnswer(Json& b, const AttachNeeds* answer) {
+  if (!answer) return;
+  if (!trim(answer->activity).empty()) b.set("activity", narrow(trim(answer->activity)));
+  if (!trim(answer->comment).empty()) b.set("comment", narrow(trim(answer->comment)));
+  if (!answer->options.empty() || !answer->chosen.empty()) {
+    Json ids = Json::array();
+    for (int id : answer->chosen) ids.push(id);
+    b.set("optionIds", ids);
+  }
+}
+}  // namespace
+
+void App::confirmPending(int id, const AttachNeeds* answer) {
+  if (!signedIn) return;
+  Json b = Json::object();
+  putAnswer(b, answer);
+  busy = true;
+  error.clear();
+  if (panel_) panel_->invalidate();
+  api.send(L"POST", "/api/time/entries/" + std::to_string(id) + "/confirm", &b, [this, id](const Reply& r) {
+    busy = false;
+    if (r.status == 401) {
+      sessionLost();
+      return;
+    }
+    if (r.ok()) {
+      pendingNeeds.erase(id);
+    } else if (r.status == 422 && r.json.str("error") == "time_detail_required") {
+      pendingNeeds[id] = parseAttachNeeds(r.json, r.error);  // the panel asks for it under the stopwatch
+    } else {
+      error = r.error;
+      offline = r.status == 0;
+    }
+    refresh();
+  });
+}
+
+void App::dismissPendingNeeds(int id) {
+  pendingNeeds.erase(id);
+  if (panel_) panel_->invalidate();
+}
 void App::discardPending(int id) { action(L"POST", "/api/time/entries/" + std::to_string(id) + "/discard", nullptr); }
 
 void App::openBrowser() {

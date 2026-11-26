@@ -86,7 +86,11 @@ class App {
   void resumeTimer();
   void stopTimer();
   void cancelTimer();
-  void confirmPending(int id);
+  // ✓ on stopped time. When the card needs a choice or Дейност + Коментар the server says what (422); the panel asks
+  // for it under the stopwatch and sends it back here as `answer`.
+  void confirmPending(int id, const AttachNeeds* answer = nullptr);
+  void dismissPendingNeeds(int id);
+  std::map<int, AttachNeeds> pendingNeeds;  // stopped entry id → what its ✓ still needs
   void discardPending(int id);
   void openBrowser();
   void togglePanel();

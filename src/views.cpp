@@ -214,7 +214,76 @@ float Panel::paintTimer(RectF r) {
     if (ui.iconButton(ui.id("no", id), RectF(row.r - 44, row.t + 3, row.r - 8, row.b - 3), kCancel, L"Отхвърли (✕)", !a.busy))
       after([id] { app().discardPending(id); });
     y = row.b;
+    // ✓ was refused for want of the card's choice or Дейност + Коментар: asked for here, then ✓ again with them.
+    auto pn = a.pendingNeeds.find(id);
+    if (pn != a.pendingNeeds.end()) {
+      RectF box(r.l, y + 4, r.r, y + 4 + needsHeight(pn->second) + 10);
+      ui.card(box, 8);
+      bool send = false, dismiss = false;
+      needsForm(RectF(box.l + 12, box.t + 4, box.r - 8, box.b - 4), 100000 + id, pn->second, pendingForm_[id], L"Запиши", kCheck, !a.busy,
+                &send, &dismiss);
+      if (send) {
+        AttachNeeds answer = pendingForm_[id];
+        after([id, answer] { app().confirmPending(id, &answer); });
+      }
+      if (dismiss) after([id] { app().dismissPendingNeeds(id); });
+      y = box.b;
+    }
   }
+  return y;
+}
+
+// „What the server still wants“ before it takes time on a card (422 time_detail_required): the activity's option choice
+// (the defaults already ticked) and/or, on a project task, „Дейност“ + „Коментар“. Any other refusal: its message only.
+float Panel::needsHeight(const AttachNeeds& need) {
+  return 32.f + (need.options.empty() ? 0.f : 38.f) + (need.needsDetail ? 38.f : 0.f);
+}
+
+float Panel::needsForm(RectF r, int key, const AttachNeeds& need, AttachNeeds& form, const wchar_t* label, const wchar_t* icon,
+                       bool enabled, bool* send, bool* dismiss) {
+  const UiPalette& P = ui.pal;
+  if (form.code != need.code || form.message != need.message || form.options.size() != need.options.size()) form = need;  // a new answer
+  float y = r.t;
+  ui.text(RectF(r.l, y, r.r - 36, y + 30), need.message, 11.5f, P.danger, 400, Align::Left, VAlign::Middle, true);
+  if (ui.iconButton(ui.id("ndismiss", key), RectF(r.r - 30, y + 1, r.r, y + 29), kCancel, L"Скрий")) *dismiss = true;
+  y += 32;
+  bool hasForm = !need.options.empty() || need.needsDetail;
+  bool chosenOk = need.options.empty() || (form.multiSelect ? !form.chosen.empty() : form.chosen.size() == 1);
+  bool detailOk = !need.needsDetail || (!trim(form.activity).empty() && !trim(form.comment).empty());
+  RectF b(r.r - 130, 0, r.r, 0);
+  if (!need.options.empty()) {
+    float x = r.l;
+    for (auto& o : need.options) {
+      bool on = std::find(form.chosen.begin(), form.chosen.end(), o.id) != form.chosen.end();
+      float w = ui.textWidth(o.name, 12.f, 600) + 26;
+      RectF chip(x, y + 3, std::min(x + w, r.r - 140), y + 31);
+      bool hot = ui.hot(chip);
+      ui.p->rrect(chip, 7, on ? P.accent : P.text.withA(hot ? 0.09f : 0.05f));
+      ui.text(chip, o.name, 12.f, on ? P.onAccent : P.text, 600, Align::Center);
+      if (!o.hint.empty()) ui.tooltip(chip, o.hint);
+      if (hot) ui.cursor = LoadCursorW(nullptr, IDC_HAND);
+      if (ui.press(ui.id("opt", key * 64 + o.id), chip)) {
+        if (form.multiSelect) {
+          if (on) form.chosen.erase(std::remove(form.chosen.begin(), form.chosen.end(), o.id), form.chosen.end());
+          else form.chosen.push_back(o.id);
+        } else {
+          form.chosen = {o.id};
+        }
+      }
+      x = chip.r + 6;
+    }
+    b = RectF(r.r - 130, y + 3, r.r, y + 31);
+    y += 38;
+  }
+  if (need.needsDetail) {
+    float mid = r.l + (r.w() - 140) * 0.42f;
+    std::wstring hintA = need.maxChars > 0 ? L"Дейност (до " + num(need.maxChars) + L" знака)" : L"Дейност";
+    ui.textBox(ui.id("act", key), RectF(r.l, y + 3, mid - 6, y + 31), form.activity, hintA);
+    ui.textBox(ui.id("com", key), RectF(mid, y + 3, r.r - 140, y + 31), form.comment, L"Коментар");
+    b = RectF(r.r - 130, y + 3, r.r, y + 31);
+    y += 38;
+  }
+  if (hasForm && ui.button(ui.id("nsend", key), b, label, Btn::Accent, icon, enabled && chosenOk && detailOk)) *send = true;
   return y;
 }
 
@@ -484,8 +553,7 @@ void Panel::paintSummary(RectF area) {
   auto extraOf = [&](const SumCard& k) -> float {
     if (k.closed) return 0.f;
     auto at = a.attachProblems.find(k.id);
-    if (at != a.attachProblems.end())
-      return 32.f + (at->second.options.empty() ? 0.f : 38.f) + (at->second.needsDetail ? 38.f : 0.f) + 6.f;
+    if (at != a.attachProblems.end()) return needsHeight(at->second) + 6.f;
     return a.cardProblems.count(k.id) ? 40.f : 0.f;
   };
   auto heightOf = [&](const SumCard& k) { return 50.f + extraOf(k); };
@@ -549,56 +617,15 @@ void Panel::paintSummary(RectF area) {
     // What the server wants before it takes the picked entry: its message, the choice, „Дейност“ + „Коментар“.
     auto ait = a.attachProblems.find(id);
     if (ait != a.attachProblems.end()) {
-      const AttachNeeds& need = ait->second;
-      AttachNeeds& form = attachForm_[id];
-      if (form.code != need.code || form.message != need.message || form.options.size() != need.options.size()) form = need;  // a new answer
-      float yy = top.b - 2;
-      ui.text(RectF(cr.l + 16, yy, cr.r - 46, yy + 30), need.message, 11.5f, P.danger, 400, Align::Left, VAlign::Middle, true);
-      if (ui.iconButton(ui.id("adismiss", id), RectF(cr.r - 40, yy + 1, cr.r - 10, yy + 29), kCancel, L"Скрий")) after([id] { app().dismissAttach(id); });
-      yy += 32;
-      bool sending = a.attachingCards.count(id) > 0;
-      bool hasForm = !need.options.empty() || need.needsDetail;
-      bool chosenOk = need.options.empty() || (form.multiSelect ? !form.chosen.empty() : form.chosen.size() == 1);
-      bool detailOk = !need.needsDetail || (!trim(form.activity).empty() && !trim(form.comment).empty());
-      RectF send(cr.r - 140, 0, cr.r - 10, 0);
-      if (!need.options.empty()) {
-        float xx = cr.l + 16;
-        for (auto& o : need.options) {
-          bool on = std::find(form.chosen.begin(), form.chosen.end(), o.id) != form.chosen.end();
-          float w = ui.textWidth(o.name, 12.f, 600) + 26;
-          RectF chip(xx, yy + 3, std::min(xx + w, cr.r - 150), yy + 31);
-          bool hot = ui.hot(chip);
-          ui.p->rrect(chip, 7, on ? P.accent : P.text.withA(hot ? 0.09f : 0.05f));
-          ui.text(chip, o.name, 12.f, on ? P.onAccent : P.text, 600, Align::Center);
-          if (!o.hint.empty()) ui.tooltip(chip, o.hint);
-          if (hot) ui.cursor = LoadCursorW(nullptr, IDC_HAND);
-          if (ui.press(ui.id("opt", id * 64 + o.id), chip)) {
-            if (form.multiSelect) {
-              if (on) form.chosen.erase(std::remove(form.chosen.begin(), form.chosen.end(), o.id), form.chosen.end());
-              else form.chosen.push_back(o.id);
-            } else {
-              form.chosen = {o.id};
-            }
-          }
-          xx = chip.r + 6;
-        }
-        send = RectF(cr.r - 140, yy + 3, cr.r - 10, yy + 31);
-        yy += 38;
-      }
-      if (need.needsDetail) {
-        float mid = cr.l + 16 + (cr.w() - 180) * 0.42f;
-        std::wstring hintA = need.maxChars > 0 ? L"Дейност (до " + num(need.maxChars) + L" знака)" : L"Дейност";
-        ui.textBox(ui.id("act", id), RectF(cr.l + 16, yy + 3, mid - 6, yy + 31), form.activity, hintA);
-        ui.textBox(ui.id("com", id), RectF(mid, yy + 3, cr.r - 150, yy + 31), form.comment, L"Коментар");
-        send = RectF(cr.r - 140, yy + 3, cr.r - 10, yy + 31);
-        yy += 38;
-      }
-      if (hasForm && ui.button(ui.id("send", id), send, sending ? L"Закача…" : L"Сложи", Btn::Accent, kAttach,
-                               !sending && chosenOk && detailOk && a.armedEntry && !st.hasRunning)) {
+      bool sending = a.attachingCards.count(id) > 0, send = false, dismiss = false;
+      needsForm(RectF(cr.l + 16, top.b - 2, cr.r - 10, cr.b), id, ait->second, attachForm_[id], sending ? L"Закача…" : L"Сложи", kAttach,
+                !sending && a.armedEntry && !st.hasRunning, &send, &dismiss);
+      if (send) {
         int e = a.armedEntry;
-        AttachNeeds answer = form;
+        AttachNeeds answer = attachForm_[id];
         after([e, id, answer] { app().attachEntry(e, id, &answer); });
       }
+      if (dismiss) after([id] { app().dismissAttach(id); });
       continue;
     }
 

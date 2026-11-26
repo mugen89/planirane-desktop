@@ -53,6 +53,7 @@ most once a day.
 | Click a row or a number in the table | The table collapses to that row and its cards take the room (the name again, or ✕, brings the table back); „Пусни“ starts the stopwatch on a card, „Закачи“ moves a running stopwatch onto it |
 | „Провери за обновление“ (bottom of the panel, by the version) | Checks GitHub and installs a newer version at once; the app closes and comes back by itself. Blue — „Обнови до X“ — when the regular check has found one |
 | „За разпределяне“ (under the stopwatch) | Time recorded without a card: „Избери карта“ by an entry, then a row or number in the table and „Сложи тук“ on a card. A choice the card needs (its activity's options, or „Дейност“ + „Коментар“ on a project task) appears under it. The browser has no such screen |
+| ✓ on stopped time whose card needs a choice | The choice (or „Дейност“ + „Коментар“) appears under the stopwatch; „Запиши“ sends it |
 | A card's lane menu | Moves it — Предстоящи, В процес, За одобрение, Приключени — with the browser's rules; when closing needs a „№ вх. док.“, it is typed under the card |
 | Right-click it, or the tray icon | The menu: the same actions, open in the browser, sign out, close |
 | First start | The sign-in window: server address (e.g. `http://server:8106`), username, password |
@@ -62,7 +63,7 @@ only a few such entries at a time (Админ setting „максимум нер
 
 Command line (talks to the copy already running): `KanbanDesktop.exe --panel | --hide | --start | --pause |
 --resume | --stop | --cancel | --refresh | --update | --signin | --signout | --quit`; for tests, what a click does:
-`--select:<row>[:<column>]` (the table), `--view:<id>` (a view above it), `--arm:<entry>` / `--attach:<entry>:<card>[:<option ids>]` („Избери карта“ / „Сложи тук“), `--move:<card>:<lane>[:<№ вх. док.>]` (a card's
+`--select:<row>[:<column>]` (the table), `--view:<id>` (a view above it), `--arm:<entry>` / `--attach:<entry>:<card>[:<option ids>]` („Избери карта“ / „Сложи тук“), `--confirm:<entry>[:<option ids>]` (✓), `--move:<card>:<lane>[:<№ вх. док.>]` (a card's
 lane menu), and `--shot:<file.png>[|<row>[|<column>]]` (the panel drawn off screen at its real size).
 
 Settings live in `%APPDATA%\KanbanDesktop` (`config.json`, `session.dat`). `KANBANDESKTOP_DATA` points a copy at
