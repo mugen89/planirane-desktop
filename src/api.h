@@ -63,7 +63,13 @@ struct SumCard {
   int id = 0, boardId = 0, normSeconds = 0;
   bool hasClient = false, awaiting = false, closed = false;
   std::string status, row;
+  std::string laneKey;  // upcoming / in_progress / review / done — what POST /collector/cards/:id/move takes
   std::wstring title, clientName, obligationCode, dueDate, lane, worker;
+};
+// A view of the unified board this person may open (the web's subview bar): ex-clients, mp-people, …
+struct SubviewTab {
+  std::string id, set;  // set: executor („Изп.") / partner („УС")
+  std::wstring label;   // „Задачи по клиенти"
 };
 struct Summary {
   bool loaded = false;
@@ -73,6 +79,7 @@ struct Summary {
   std::vector<SumRow> rows;
   SumRow total;
   std::vector<SumCard> cards;
+  std::vector<SubviewTab> subviews;  // only those with a table
 };
 Summary parseSummary(const rt::Json& j);
 

@@ -272,9 +272,22 @@ void App::command(const std::wstring& c) {
     if (gfx().ensure()) {
       Panel shot;
       shot.select(parts.size() > 1 ? narrow(parts[1]) : "", parts.size() > 2 ? narrow(parts[2]) : "");
-      auto target = gfx().target(920, 700);
-      if (target && shot.renderTo(target.Get(), 920, 700, 3, !systemUsesLightTheme())) savePng(target.Get(), parts[0]);
+      float s = 1;
+      RECT at = panelRect(s);  // the real panel's size on this screen, in DIPs
+      int w = (int)((at.right - at.left) / s), h = (int)((at.bottom - at.top) / s);
+      auto target = gfx().target(w, h);
+      if (target && shot.renderTo(target.Get(), w, h, 3, !systemUsesLightTheme())) savePng(target.Get(), parts[0]);
     }
+  } else if (c.rfind(L"move:", 0) == 0) {  // move:<card>:<lane>[:<№ вх. док.>] — what the lane picker does
+    std::wstring rest = c.substr(5);
+    size_t p1 = rest.find(L':');
+    if (p1 != std::wstring::npos) {
+      size_t p2 = rest.find(L':', p1 + 1);
+      std::wstring lane = rest.substr(p1 + 1, p2 == std::wstring::npos ? std::wstring::npos : p2 - p1 - 1);
+      moveCard(_wtoi(rest.substr(0, p1).c_str()), narrow(lane), p2 == std::wstring::npos ? std::wstring() : rest.substr(p2 + 1));
+    }
+  } else if (c.rfind(L"view:", 0) == 0) {  // view:<id> — what a tab above the table does
+    chooseSubview(narrow(c.substr(5)));
   } else if (c.rfind(L"select:", 0) == 0 && panel_) {  // select:<row>[:<column>] — the panel's row / cell, as a click would
     std::string rest = narrow(c.substr(7));
     size_t colon = rest.find(':');  // row keys never contain one; a column key may ("status:…")
@@ -346,6 +359,9 @@ void App::signOut() {
   st = {};
   user = {};
   summary = {};
+  cardProblems.clear();
+  movingCards.clear();
+  subviewChoice.clear();
   error.clear();
   stateSeq_++;
   updatePill();
@@ -362,6 +378,9 @@ void App::sessionLost() {
   st = {};
   user = {};
   summary = {};
+  cardProblems.clear();
+  movingCards.clear();
+  subviewChoice.clear();
   stateSeq_++;
   hidePanel();
   updatePill();
@@ -429,16 +448,87 @@ void App::startTimerOnCard(int cardId) {
   else action(L"POST", "/api/time/start", &b);
 }
 
+void App::moveCard(int cardId, const std::string& lane, const std::wstring& reference) {
+  if (!signedIn || movingCards.count(cardId)) return;
+  Json b = Json::object();
+  b.set("lane", lane);
+  if (!trim(reference).empty()) b.set("referenceId", narrow(trim(reference)));
+  movingCards.insert(cardId);
+  cardProblems.erase(cardId);
+  if (panel_) panel_->invalidate();
+  api.send(L"POST", "/api/collector/cards/" + std::to_string(cardId) + "/move", &b, [this, cardId, lane](const Reply& r) {
+    movingCards.erase(cardId);
+    if (r.status == 401) {
+      sessionLost();
+      return;
+    }
+    if (r.ok()) {
+      // Shown at once; the table's numbers follow with the refresh below.
+      for (auto& k : summary.cards)
+        if (k.id == cardId) {
+          k.laneKey = lane;
+          if (lane == "done") k.closed = true;
+        }
+    } else {
+      // The refusals (422) carry a code in `error` and the sentence for people in `message`.
+      CardProblem p;
+      p.code = r.json.str("error");
+      p.message = widen(r.json.str("message"));
+      if (p.message.empty()) p.message = r.error;
+      cardProblems[cardId] = p;
+    }
+    refreshSummary();
+    if (panel_) panel_->invalidate();
+  });
+}
+
+void App::chooseSubview(const std::string& id) {
+  if (!signedIn || id.empty()) return;
+  if (id == (subviewChoice.empty() ? summary.subviewId : subviewChoice)) return;
+  subviewChoice = id;
+  summary.subviewId = id;  // the tab lights up at once; the table says "Зарежда…" until it comes
+  summary.loaded = false;
+  for (auto& v : summary.subviews)
+    if (v.id == id) summary.subviewLabel = v.label;
+  Json b = Json::object();
+  b.set("boardSubview", id);
+  api.send(L"PATCH", "/api/me/view", &b, [this, id](const Reply& r) {
+    if (r.status == 401) {
+      sessionLost();
+      return;
+    }
+    // Stored: from now on the server's own (a later change in the browser is followed here too). Refused — e.g.
+    // locked by the administrator (403) — it stays chosen on this PC until the app closes, as in the web.
+    if (r.ok() && subviewChoice == id) subviewChoice.clear();
+    if (!r.ok()) logf("view: %s not stored (%d)", id.c_str(), r.status);
+  });
+  refreshSummary();
+  if (panel_) panel_->invalidate();
+}
+
+void App::dismissProblem(int cardId) {
+  cardProblems.erase(cardId);
+  if (panel_) panel_->invalidate();
+}
+
 void App::refreshSummary() {
-  if (!signedIn || api.base.empty() || summaryBusy) return;
+  if (!signedIn || api.base.empty()) return;
+  if (summaryBusy) {
+    summaryAgain_ = true;
+    return;
+  }
   SYSTEMTIME t;
   GetLocalTime(&t);
   char path[96];
   snprintf(path, sizeof path, "/api/desktop/summary?year=%d&month=%d", t.wYear, t.wMonth);
+  std::string url = path;
+  if (!subviewChoice.empty()) url += "&subview=" + subviewChoice;  // ids are plain ASCII: ex-clients, mp-people
   summaryBusy = true;
   summaryAt_ = nowSec();
-  api.send(L"GET", path, nullptr, [this](const Reply& r) {
+  api.send(L"GET", url, nullptr, [this](const Reply& r) {
     summaryBusy = false;
+    bool again = summaryAgain_;
+    summaryAgain_ = false;
     if (r.status == 401) {
       sessionLost();
       return;
@@ -452,6 +542,7 @@ void App::refreshSummary() {
       summaryError = r.error;
     }
     if (panel_) panel_->invalidate();
+    if (again) refreshSummary();
   });
 }
 void App::pauseTimer() { action(L"POST", "/api/time/pause", nullptr); }
@@ -477,22 +568,8 @@ void App::togglePanel() {
     return;
   }
   if (nowSec() - panelHiddenAt_ < 0.35) return;  // that same click just closed it
-  // Above the taskbar button, right edges aligned, like Windows' own flyouts.
-  RECT anchor = pill_.shown() ? pill_.rect() : RECT{};
-  TaskbarInfo t = queryTaskbar();
-  float s = t.ok ? t.scale : 1.f;
-  MONITORINFO mi{};
-  mi.cbSize = sizeof mi;
-  GetMonitorInfoW(t.mon ? t.mon : MonitorFromWindow(hwnd_, MONITOR_DEFAULTTOPRIMARY), &mi);
-  // Wide enough for the summary table; never more than the screen.
-  int m = (int)(12 * s);
-  int w = std::min<int>((int)(920 * s), mi.rcWork.right - mi.rcWork.left - 2 * m);
-  int h = std::min<int>((int)(700 * s), mi.rcWork.bottom - mi.rcWork.top - 2 * m);
-  int right = pill_.shown() ? anchor.right : mi.rcWork.right - m;
-  int bottom = mi.rcWork.bottom - m;
-  RECT at{std::max<LONG>(mi.rcWork.left + m, right - w), std::max<LONG>(mi.rcWork.top + m, bottom - h), 0, 0};
-  at.right = at.left + w;
-  at.bottom = at.top + h;
+  float s = 1;
+  RECT at = panelRect(s);
   if (!panel_) {
     panel_ = std::make_unique<Panel>();
     if (!panel_->create(inst_, at)) {
@@ -503,6 +580,27 @@ void App::togglePanel() {
   panel_->showAt(at);
   refresh();
   refreshSummary();
+}
+
+// Above the taskbar button, right edges aligned, like Windows' own flyouts: wide enough for the summary table and
+// almost as tall as the screen (the person's wish — the table and its cards need the room); never more than the
+// work area.
+RECT App::panelRect(float& s) {
+  RECT anchor = pill_.shown() ? pill_.rect() : RECT{};
+  TaskbarInfo t = queryTaskbar();
+  s = t.ok ? t.scale : 1.f;
+  MONITORINFO mi{};
+  mi.cbSize = sizeof mi;
+  GetMonitorInfoW(t.mon ? t.mon : MonitorFromWindow(hwnd_, MONITOR_DEFAULTTOPRIMARY), &mi);
+  int m = (int)(12 * s);
+  int w = std::min<int>((int)(920 * s), mi.rcWork.right - mi.rcWork.left - 2 * m);
+  int h = mi.rcWork.bottom - mi.rcWork.top - 2 * m;
+  int right = pill_.shown() ? anchor.right : mi.rcWork.right - m;
+  int bottom = mi.rcWork.bottom - m;
+  RECT at{std::max<LONG>(mi.rcWork.left + m, right - w), std::max<LONG>(mi.rcWork.top + m, bottom - h), 0, 0};
+  at.right = at.left + w;
+  at.bottom = at.top + h;
+  return at;
 }
 
 void App::hidePanel() {

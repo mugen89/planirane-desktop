@@ -103,6 +103,8 @@ Summary parseSummary(const Json& j) {
       }
       s.layout.push_back(std::move(col));
     }
+  if (auto v = j.find("subviews"); v && v->isArr())
+    for (auto& x : v->a) s.subviews.push_back({x.str("id"), x.str("set"), wstr(x, "label")});
   if (auto rows = j.find("rows"); rows && rows->isArr())
     for (auto& r : rows->a) s.rows.push_back(parseRow(r));
   if (auto t = j.find("total"); t && t->isObj()) s.total = parseRow(*t);
@@ -118,6 +120,7 @@ Summary parseSummary(const Json& j) {
       k.closed = c.flag("closed", false);
       k.status = c.str("status");
       k.row = c.str("row");
+      k.laneKey = c.str("laneKey");
       k.title = wstr(c, "title");
       k.clientName = wstr(c, "clientName");
       k.obligationCode = wstr(c, "obligationCode");

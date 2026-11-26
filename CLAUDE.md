@@ -12,6 +12,12 @@ Guidance for Claude Code in this repository: **Kanban Desktop**, the Windows com
   kanban-app tree, with its CHANGELOG) rather than computing it twice.
 - **The endpoints the desktop uses are listed in kanban-app `docs/API.md` („Настолно приложение“).** Keep
   that list current when you use a new one.
+- **Card moves are the web's own move** (`POST /collector/cards/:id/move`). The server's refusal (`422`, `error` +
+  `message`) decides what the card shows: `reference_required` → a „№ вх. док.“ field under it; anything else → the
+  message and „Отвори в браузъра“. Never pre-check a rule here.
+- **Test writes on a scratch copy, not on :8106.** Moves write card history and close cards; a view change writes the
+  person's own preference (on :8106 that is the user's admin account). Copy `kanban_merge` to a scratch database, run
+  the `kanban-app:merge` image on :8199 against it, point a test copy (`KANBANDESKTOP_DATA`) there, drop it all after.
 - **Light on the PC.** The user's explicit requirement. No timers faster than 1 s while idle, no GPU device
   for the taskbar button (it is software-rendered on purpose), windows give their device back 20 s after
   closing. Measure after changes (Task Manager / `Get-Process`): idle was 0 ms CPU per 10 s, ~4–8 MB private.

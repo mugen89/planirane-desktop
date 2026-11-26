@@ -2,6 +2,8 @@
 #pragma once
 #include "ui.h"
 
+#include <map>
+
 namespace kd {
 
 class Panel : public rt::UiWindow {
@@ -19,9 +21,11 @@ class Panel : public rt::UiWindow {
  private:
   float paintTimer(rt::RectF r);         // returns where it ended
   void paintSummary(rt::RectF area);
+  float paintViews(rt::RectF r);         // the views above the table; returns where it ended
   static std::wstring toUpperBg(const std::wstring& s);
   double armedCancel_ = 0;  // "Откажи" asks once more for three seconds
   std::string selRow_, selCol_;  // the clicked row ("__total" = ОБЩО) and column ("" = the whole row)
+  std::map<int, std::wstring> refInput_;  // „№ вх. док.“ typed under a card the server would not close without one
 };
 
 class LoginWindow : public rt::UiWindow {

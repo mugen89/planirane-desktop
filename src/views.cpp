@@ -35,7 +35,9 @@ std::wstring initials(const std::wstring& name) {
     if (c == L' ') {
       start = true;
     } else if (start) {
-      out += (wchar_t)towupper(c);
+      wchar_t u = c;
+      CharUpperBuffW(&u, 1);
+      out += u;
       start = false;
       if (out.size() == 2) break;
     }
@@ -203,6 +205,7 @@ void Panel::paintSummary(RectF area) {
   App& a = app();
   const UiPalette& P = ui.pal;
   const Summary& s = a.summary;
+  if (s.subviews.size() > 1) area.t = paintViews(RectF(area.l, area.t, area.r, area.t + 30)) + 10;
   if (!s.loaded) {
     std::wstring t = !a.summaryError.empty() ? a.summaryError : a.summaryBusy ? L"Зарежда таблицата…" : L"Таблицата се зарежда при отваряне.";
     ui.text(RectF(area.l, area.t + 10, area.r, area.t + 60), t, 12.5f, a.summaryError.empty() ? P.dim : P.danger, 400, Align::Left,
@@ -250,9 +253,19 @@ void Panel::paintSummary(RectF area) {
   y += hh;
   ui.divider(RectF(area.l, y, area.r, y + 1));
 
+  // A row or a number chosen → the table collapses to that row (its numbers stay clickable) and its cards take the
+  // room. Its name again, or ✕ over the list, brings the whole table back.
   bool selected = !selRow_.empty();
-  float listH = selected ? std::max(150.f, (area.b - y) * 0.46f) : 0.f;
-  float tableBottom = area.b - listH - (selected ? 8 : 0);
+  int selIndex = -1;
+  if (selected && selRow_ != "__total") {
+    for (size_t i = 0; i < s.rows.size(); i++)
+      if (s.rows[i].key == selRow_) selIndex = (int)i;
+    if (selIndex < 0) {  // gone with a refresh (e.g. its last card was closed)
+      selRow_.clear();
+      selCol_.clear();
+      selected = false;
+    }
+  }
   float rh = 27;
 
   auto cellText = [&](const SumRow& r, const SumColumn& c, Color& color, bool& pill) -> std::wstring {
@@ -331,21 +344,30 @@ void Panel::paintSummary(RectF area) {
     }
   };
 
-  drawRow(s.total, RectF(area.l, y + 2, area.r, y + 2 + rh), true, 0);
+  if (!selected) {
+    drawRow(s.total, RectF(area.l, y + 2, area.r, y + 2 + rh), true, 0);
+    y += rh + 4;
+    ui.divider(RectF(area.l, y - 1, area.r, y));
+    RectF scrollR(area.l, y, area.r, area.b);
+    float off = ui.beginScroll(ui.id("rows"), scrollR, s.rows.size() * rh);
+    for (size_t i = 0; i < s.rows.size(); i++) {
+      RectF rr(area.l, y + off + i * rh, area.r, y + off + (i + 1) * rh);
+      if (rr.b < scrollR.t || rr.t > scrollR.b) continue;
+      drawRow(s.rows[i], rr, false, (int)i + 1);
+    }
+    ui.endScroll();
+    return;
+  }
+  RectF only(area.l, y + 2, area.r, y + 2 + rh);
+  if (selIndex < 0) drawRow(s.total, only, true, 0);
+  else drawRow(s.rows[(size_t)selIndex], only, false, selIndex + 1);
+  ui.tooltip(RectF(only.l, only.t, only.l + nameW, only.b), L"Щракнете отново — цялата таблица");
   y += rh + 4;
   ui.divider(RectF(area.l, y - 1, area.r, y));
-  RectF scrollR(area.l, y, area.r, tableBottom);
-  float off = ui.beginScroll(ui.id("rows"), scrollR, s.rows.size() * rh);
-  for (size_t i = 0; i < s.rows.size(); i++) {
-    RectF rr(area.l, y + off + i * rh, area.r, y + off + (i + 1) * rh);
-    if (rr.b < scrollR.t || rr.t > scrollR.b) continue;
-    drawRow(s.rows[i], rr, false, (int)i + 1);
-  }
-  ui.endScroll();
-  if (!selected) return;
+  if (selRow_.empty()) return;  // that click just closed it: the whole table from the next frame
 
   // ---- the cards behind the selection
-  RectF list(area.l, tableBottom + 8, area.r, area.b);
+  RectF list(area.l, y + 8, area.r, area.b);
   std::vector<const SumCard*> cards;
   for (auto& k : s.cards)
     if (cardInCell(s, k, selRow_, selCol_)) cards.push_back(&k);
@@ -356,33 +378,63 @@ void Panel::paintSummary(RectF area) {
     if (c.key == selCol_) colLabel = c.head + (c.sub.empty() ? L"" : L" " + c.sub);
   ui.text(RectF(list.l + 4, list.t, list.r - 40, list.t + 24),
           rowLabel + (colLabel.empty() ? L"" : L"  ·  " + colLabel) + L"  —  " + num((int)cards.size()) + L" карти", 12.5f, P.text, 600);
-  if (ui.iconButton(ui.id("clearsel"), RectF(list.r - 32, list.t - 2, list.r, list.t + 26), kCancel, L"Затвори списъка")) {
+  if (ui.iconButton(ui.id("clearsel"), RectF(list.r - 32, list.t - 2, list.r, list.t + 26), kCancel, L"Затвори списъка — цялата таблица")) {
     selRow_.clear();
     selCol_.clear();
   }
   RectF cardsR(list.l, list.t + 28, list.r, list.b);
-  float ch = 46;
-  float coff = ui.beginScroll(ui.id("cards"), cardsR, cards.size() * ch);
+  // The collector's lanes, named as on the board. Choosing one moves the card there — the web's move, with its rules.
+  static const char* kLaneKeys[] = {"upcoming", "in_progress", "review", "done"};
+  static const std::vector<std::wstring> kLaneNames = {L"Предстоящи", L"В процес", L"За одобрение", L"Приключени"};
+  auto laneIndex = [](const std::string& key) {
+    for (int i = 0; i < 4; i++)
+      if (key == kLaneKeys[i]) return i;
+    return 0;
+  };
+  auto heightOf = [&](const SumCard& k) { return !k.closed && a.cardProblems.count(k.id) ? 90.f : 50.f; };
+  float contentH = 0;
+  for (auto* k : cards) contentH += heightOf(*k);
+  float coff = ui.beginScroll(ui.id("cards"), cardsR, contentH);
   const TimeState& st = a.st;
-  for (size_t i = 0; i < cards.size(); i++) {
-    const SumCard& k = *cards[i];
-    RectF cr(cardsR.l, cardsR.t + coff + i * ch, cardsR.r, cardsR.t + coff + (i + 1) * ch - 4);
+  float cy = cardsR.t + coff;
+  for (const SumCard* kp : cards) {
+    const SumCard& k = *kp;
+    float h = heightOf(k);
+    RectF cr(cardsR.l, cy, cardsR.r, cy + h - 4);
+    cy += h;
     if (cr.b < cardsR.t || cr.t > cardsR.b) continue;
     ui.card(cr, 8);
-    ui.p->rrect(RectF(cr.l + 4, cr.t + 6, cr.l + 7, cr.b - 6), 1.5f, k.closed ? green : statusColor(k.status));
-    const std::wstring& title = k.title;  // already begins with the activity's code
-    ui.text(RectF(cr.l + 16, cr.t + 3, cr.r - 124, cr.t + 22), title, 12.5f, P.text, 600);
+    RectF top(cr.l, cr.t, cr.r, cr.t + 46);
+    ui.p->rrect(RectF(top.l + 4, top.t + 6, top.l + 7, top.b - 6), 1.5f, k.closed ? green : statusColor(k.status));
+    const float textR = k.closed ? top.r - 12 : top.r - 282;
+    ui.text(RectF(top.l + 16, top.t + 3, textR, top.t + 22), k.title, 12.5f, P.text, 600);  // already begins with the activity's code
     std::wstring sub = k.clientName.empty() ? L"задача" : k.clientName;
     if (!k.dueDate.empty()) sub += L"  ·  срок " + shortDate(k.dueDate);
-    if (!k.lane.empty()) sub += L"  ·  " + k.lane;
+    if (k.closed) sub += L"  ·  приключена";
     if (!k.worker.empty()) sub += L"  ·  " + k.worker;
-    if (k.awaiting) sub += L"  ·  за одобрение";
-    ui.text(RectF(cr.l + 16, cr.t + 21, cr.r - 124, cr.b - 3), sub, 11.f, P.dim);
+    if (k.awaiting) sub += L"  ·  чака одобрение";
+    ui.text(RectF(top.l + 16, top.t + 21, textR, top.b - 3), sub, 11.f, P.dim);
     if (k.closed) continue;
     int id = k.id;
-    RectF b(cr.r - 112, cr.cy() - 15, cr.r - 10, cr.cy() + 15);
+
+    RectF lr(top.r - 272, top.cy() - 15, top.r - 120, top.cy() + 15);
+    if (a.movingCards.count(id)) {
+      ui.text(lr, L"мести се…", 12.f, P.dim, 400, Align::Center);
+    } else if (k.laneKey.empty()) {
+      // A server older than web CHANGELOG 332 does not say which lane the card is in: its name, and no picker — a
+      // picker would have to guess the current lane, and a wrong guess moves a card nobody meant to move.
+      ui.text(lr, k.lane, 12.f, P.dim, 400, Align::Center);
+    } else {
+      int idx = laneIndex(k.laneKey);
+      if (ui.combo(ui.id("lane", id), lr, idx, kLaneNames) && kLaneKeys[idx] != k.laneKey) {
+        std::string lane = kLaneKeys[idx];
+        after([id, lane] { app().moveCard(id, lane); });
+      }
+    }
+
+    RectF b(top.r - 112, top.cy() - 15, top.r - 10, top.cy() + 15);
     if (st.hasRunning && st.running.cardId == id) {
-      ui.text(RectF(cr.r - 112, cr.t, cr.r - 12, cr.b), L"⏱ тече", 12.f, green, 600, Align::Right);
+      ui.text(RectF(top.r - 112, top.t, top.r - 12, top.b), L"⏱ тече", 12.f, green, 600, Align::Right);
     } else if (st.hasRunning) {
       if (ui.button(ui.id("attach", id), b, L"Закачи", Btn::Subtle, kAttach, !a.busy && st.canTrack)) after([id] { app().startTimerOnCard(id); });
       ui.tooltip(b, L"Пуснатият хронометър отива на тази карта");
@@ -390,9 +442,90 @@ void Panel::paintSummary(RectF area) {
       if (ui.button(ui.id("go", id), b, L"Пусни", Btn::Standard, kPlay, !a.busy && st.canTrack && st.pending.empty()))
         after([id] { app().startTimerOnCard(id); });
     }
+
+    // Why the server did not move it — and, for a missing „№ вх. док.“, the place to type it.
+    auto pit = a.cardProblems.find(id);
+    if (pit == a.cardProblems.end()) continue;
+    const CardProblem& pb = pit->second;
+    RectF pr(cr.l + 16, top.b - 2, cr.r - 10, cr.b - 6);
+    if (ui.iconButton(ui.id("dismiss", id), RectF(pr.r - 30, pr.cy() - 14, pr.r, pr.cy() + 14), kCancel, L"Скрий"))
+      after([id] { app().dismissProblem(id); });
+    if (pb.code == "reference_required") {
+      ui.text(RectF(pr.l, pr.t, pr.l + 186, pr.b), L"№ вх. док. за приключване:", 12.f, P.danger, 600);
+      std::wstring& ref = refInput_[id];
+      bool entered = false;
+      ui.textBox(ui.id("ref", id), RectF(pr.l + 190, pr.t + 3, pr.l + 400, pr.b - 3), ref, L"номер", nullptr, &entered);
+      bool ok = !trim(ref).empty() && !a.movingCards.count(id);
+      if (ui.button(ui.id("closeit", id), RectF(pr.l + 408, pr.t + 3, pr.l + 540, pr.b - 3), L"Приключи", Btn::Accent, kCheck, ok) ||
+          (entered && ok)) {
+        std::wstring r = trim(ref);
+        after([id, r] { app().moveCard(id, "done", r); });
+      }
+    } else {
+      ui.text(RectF(pr.l, pr.t, pr.r - 216, pr.b), pb.message, 11.5f, P.danger, 400, Align::Left, VAlign::Middle, true);
+      if (ui.link(ui.id("openweb", id), RectF(pr.r - 206, pr.t, pr.r - 40, pr.b), L"Отвори в браузъра", 12.f))
+        after([] { app().openBrowser(); });
+    }
   }
   ui.endScroll();
   if (cards.empty()) ui.text(cardsR, L"Няма карти тук.", 12.f, P.faint, 400, Align::Center, VAlign::Top);
+}
+
+// The views of the table, as the web's bar above the board: the executor's („Изп.") first, then the managing
+// partner's („УС"). Words instead of the web's icons — the panel is wide enough, and words need no tooltip to be read.
+float Panel::paintViews(RectF r) {
+  App& a = app();
+  const UiPalette& P = ui.pal;
+  const Summary& s = a.summary;
+  auto shortLabel = [](const std::wstring& label) {
+    static const std::wstring kPrefix = L"Задачи по ";
+    if (label.rfind(kPrefix, 0) != 0 || label.size() == kPrefix.size()) return label;
+    std::wstring t = label.substr(kPrefix.size());
+    CharUpperBuffW(t.data(), 1);  // towupper leaves Cyrillic alone in this C runtime
+    return t;
+  };
+  float x = r.l;
+  bool first = true;
+  for (const char* set : {"executor", "partner"}) {
+    bool any = false;
+    for (auto& v : s.subviews) any = any || v.set == set;
+    if (!any) continue;
+    if (!first) {
+      ui.p->rrect(RectF(x + 6, r.t + 7, x + 7, r.b - 7), 0.5f, P.stroke);
+      x += 14;
+    }
+    first = false;
+    bool exec = std::string(set) == "executor";
+    std::wstring head = exec ? L"Изп." : L"УС";
+    float hw = ui.textWidth(head, 10.5f, 600) + 8;
+    ui.text(RectF(x, r.t, x + hw, r.b), head, 10.5f, P.faint, 600);
+    ui.tooltip(RectF(x, r.t, x + hw, r.b), exec ? L"Справки в роля Изпълнител" : L"Справки в роля Управляващ съдружник");
+    x += hw;
+    for (size_t vi = 0; vi < s.subviews.size(); vi++) {
+      const SubviewTab& v = s.subviews[vi];
+      if (v.set != set) continue;
+      std::wstring t = shortLabel(v.label);
+      float w = ui.textWidth(t, 12.f, 600) + 22;
+      if (x + w > r.r) break;  // a narrow screen: what fits
+      RectF b(x, r.t, x + w, r.b);
+      bool on = v.id == s.subviewId;
+      bool hot = ui.hot(b);
+      if (on) ui.p->rrect(b, 7, P.accent);
+      else ui.p->rrect(b, 7, P.text.withA(hot ? 0.08f : 0.04f));
+      ui.text(b, t, 12.f, on ? P.onAccent : P.text, 600, Align::Center);
+      ui.tooltip(b, v.label + (exec ? L" — Изпълнител" : L" — Управляващ съдружник"));
+      if (hot && !on) ui.cursor = LoadCursorW(nullptr, IDC_HAND);
+      if (ui.press(ui.id("view", (int)vi), b) && !on) {
+        selRow_.clear();
+        selCol_.clear();
+        ui.scrollTo(ui.id("rows"), 0);
+        std::string id = v.id;
+        after([id] { app().chooseSubview(id); });
+      }
+      x += w + 6;
+    }
+  }
+  return r.b;
 }
 
 // ================================================================ sign-in

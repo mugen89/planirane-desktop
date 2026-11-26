@@ -6,9 +6,18 @@
 #include "pill.h"
 #include "store.h"
 
+#include <map>
+#include <set>
+
 namespace kd {
 
 class Panel;
+
+// Why the server refused to move a card (POST /collector/cards/:id/move answered 4xx) — shown under the card.
+struct CardProblem {
+  std::string code;  // reference_required, approval_required, time_required, timer_running, …
+  std::wstring message;
+};
 class LoginWindow;
 
 enum : UINT {
@@ -37,6 +46,8 @@ class App {
   std::wstring loginError;
   bool loginBusy = false;
   Summary summary;             // the unified board's summary table (GET /desktop/summary)
+  std::map<int, CardProblem> cardProblems;  // card id → the server's last refusal to move it
+  std::set<int> movingCards;                // moves on their way
   std::wstring summaryError;
   bool summaryBusy = false;
   std::string updateVersion;   // a newer published version, when there is one
@@ -53,6 +64,14 @@ class App {
   void startTimer();          // without a card: the desktop-only route (the server caps it, maxUnassignedTime)
   void startTimerOnCard(int cardId);  // or, while one runs, attach it to that card
   void refreshSummary();
+  // The web's own move (the collector's lanes), so every rule stays on the server: approval, „№ вх. док.“,
+  // time required, a running stopwatch. reference = „№ вх. док.“ sent along when closing.
+  void moveCard(int cardId, const std::string& lane, const std::wstring& reference = {});
+  void dismissProblem(int cardId);
+  // Another view of the table. Remembered on the server for the person, as the web does (PATCH /me/view
+  // boardSubview), so the browser opens on it too; until that is stored it is asked for with ?subview=.
+  void chooseSubview(const std::string& id);
+  std::string subviewChoice;
   void pauseTimer();
   void resumeTimer();
   void stopTimer();
@@ -93,6 +112,8 @@ class App {
   double lastPoll_ = 0;
   double nextUpdateCheck_ = 0;
   double summaryAt_ = 0;
+  bool summaryAgain_ = false;  // asked for while one was on its way (e.g. right after a move): once more when it lands
+  RECT panelRect(float& scale);  // above the taskbar button, almost as tall as the work area
   double panelHiddenAt_ = 0;  // a click on the tray icon first closes the flyout; it must not reopen it
   int stateSeq_ = 0;          // answers older than the newest request are ignored
 };
