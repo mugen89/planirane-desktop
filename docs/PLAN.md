@@ -16,11 +16,11 @@ glance) away. Local only, like the web app.
 | 5 | **Time without a card is started from the desktop only.** The browser keeps requiring a card at start. | Asked for („restore the unassigned times but only for the desktop“). No server change was needed: `POST /time/start` without `cardId` was never removed, only the web stopped offering it. The server still enforces `maxUnassignedTime` (3), refuses a start while time waits for ✓/✕, and the web shows such sessions as „⌖ без карта“ to attach a card. |
 | 6 | **Priority: the taskbar part.** The Win+Q overlay is an extra. | The person's priority. |
 
-## What exists (v0.1.0)
+## What exists (v0.3.0)
 
 - Sign-in (server, username, password) → a 90-day sliding session, stored encrypted for the Windows user (DPAPI); the password is never stored.
 - The taskbar button: a stopwatch whose hand moves with the seconds and two lines (running time · what it is for, or „Днес h:mm · Не тече“). Software-rendered layered window: no GPU device while idle.
-- The panel above it (acrylic flyout): big clock, Пусни / Пауза / Продължи / Спри / Откажи, the stopped sessions waiting for ✓ / ✕, today's total and „за разпределяне“.
+- The panel above it (acrylic flyout, almost as tall as the screen): the stopwatch strip (Пусни / Пауза / Продължи / Спри / Откажи, the stopped sessions waiting for ✓ / ✕, today's total and „за разпределяне“), the views of the unified board („Изп.“ / „УС“, remembered on the server like the web's), its summary table (a chosen row collapses the table; its cards take the room), and per card: start / attach the stopwatch, the lane menu (the web's move). Footer: „Провери за обновление“ by the version.
 - Tray icon + menu, single instance, command line (`--panel --hide --start --pause --resume --stop --cancel --refresh --signin --signout --quit`).
 - Polls `GET /time/state` every 30 s (the browser's rhythm), refreshes at once after an action and on unlocking the screen; hides during full-screen apps and on the lock screen.
 - Verified on screen (2026-11-26): the button covers the weather slot exactly; idle → running → idle redraws at once.
