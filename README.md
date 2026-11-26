@@ -51,6 +51,7 @@ most once a day.
 | Click the stopwatch on the taskbar | The panel: the stopwatch (start, pause, resume, stop, cancel; stopped time waits for ✓ / ✕) and the unified board's summary table |
 | The views above the table | The same views as in the browser („Изп.“ / „УС“, as your role allows). The choice is remembered on the server for you, so the browser opens on it too |
 | Click a row or a number in the table | The table collapses to that row and its cards take the room (the name again, or ✕, brings the table back); „Пусни“ starts the stopwatch on a card, „Закачи“ moves a running stopwatch onto it |
+| „Провери за обновление“ (bottom of the panel, by the version) | Checks GitHub and installs a newer version at once; the app closes and comes back by itself. Blue — „Обнови до X“ — when the regular check has found one |
 | A card's lane menu | Moves it — Предстоящи, В процес, За одобрение, Приключени — with the browser's rules; when closing needs a „№ вх. док.“, it is typed under the card |
 | Right-click it, or the tray icon | The menu: the same actions, open in the browser, sign out, close |
 | First start | The sign-in window: server address (e.g. `http://server:8106`), username, password |

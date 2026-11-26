@@ -18,6 +18,8 @@ constexpr const wchar_t* kSignOut = L"";
 constexpr const wchar_t* kServer = L"";
 constexpr const wchar_t* kPerson = L"";
 constexpr const wchar_t* kKey = L"";
+constexpr const wchar_t* kDownload = L"\xE896";
+constexpr const wchar_t* kSync = L"\xE895";
 constexpr const wchar_t* kAttach = L"";  // link
 
 std::wstring what(const std::wstring& card, const std::wstring& client) {
@@ -122,16 +124,30 @@ void Panel::paint() {
   y += 50;
 
   y = paintTimer(RectF(x, y, x + cw, y + 64));
-  paintSummary(RectF(x, y + 10, x + cw, H - 42));
+  paintSummary(RectF(x, y + 10, x + cw, H - 46));
 
-  // ---- footer
-  if (!a.updateNote.empty())
-    ui.text(RectF(x, H - 34, x + cw - 300, H - 12), a.updateNote, 11.5f, a.updateBusy ? P.accent : P.dim);
-  else if (!a.error.empty() || a.offline)
-    ui.text(RectF(x, H - 34, x + cw - 300, H - 12), a.error.empty() ? L"Няма връзка със сървъра — опитваме отново." : a.error, 11.5f, P.danger);
-  if (ui.link(ui.id("browser"), RectF(x + cw - 300, H - 34, x + cw - 80, H - 12), L"Отвори приложението в браузъра", 12.f))
+  // ---- footer: what is going on (update, connection) · the update button · the browser · the version
+  const float fy = H - 40, fb = H - 8;
+  float right = x + cw;
+  ui.text(RectF(right - 80, fy, right, fb), L"версия " + widen(KD_VERSION_STR), 11.f, P.faint, 400, Align::Right);
+  right -= 88;
+  if (ui.link(ui.id("browser"), RectF(right - 214, fy, right, fb), L"Отвори приложението в браузъра", 12.f))
     after([] { app().openBrowser(); });
-  ui.text(RectF(x + cw - 80, H - 34, x + cw, H - 12), L"версия " + widen(KD_VERSION_STR), 11.f, P.faint, 400, Align::Right);
+  right -= 226;
+  // The update by hand: asks GitHub, and installs a newer version at once — the app closes and comes back by itself.
+  // Blue when the regular check has already found one.
+  bool newer = !a.updateVersion.empty();
+  std::wstring ul = a.updateBusy ? L"Обновява се…" : newer ? L"Обнови до " + widen(a.updateVersion) : L"Провери за обновление";
+  float uw = ui.textWidth(ul, 13.5f, newer ? 600 : 400) + 18 + 7 + 28;
+  RectF ub(right - uw, fy + 2, right, fb - 2);
+  if (ui.button(ui.id("update"), ub, ul, newer ? Btn::Accent : Btn::Standard, newer ? kDownload : kSync, !a.updateBusy))
+    after([] { app().checkForUpdate(true); });
+  RectF note(x, fy, ub.l - 12, fb);
+  if (!a.updateNote.empty())
+    ui.text(note, a.updateNote, 11.5f, a.updateBusy ? P.accent : P.dim, 400, Align::Left, VAlign::Middle, true);
+  else if (!a.error.empty() || a.offline)
+    ui.text(note, a.error.empty() ? L"Няма връзка със сървъра — опитваме отново." : a.error, 11.5f, P.danger, 400, Align::Left,
+            VAlign::Middle, true);
 }
 
 // The stopwatch as one strip: clock, what it is for, the buttons; stopped time waiting for ✓ / ✕ under it.

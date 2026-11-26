@@ -96,6 +96,7 @@ class App {
   void updateTray();
   void trayMenu(POINT at);
   void notify(const std::wstring& title, const std::wstring& text);
+  void updateToast();  // a manual check's outcome: the panel's footer shows it, a toast only when the panel is closed
   void tick();
   void startUpdate(const std::string& version, bool manual);
   static void CALLBACK onForeground(HWINEVENTHOOK, DWORD, HWND, LONG, LONG, DWORD, DWORD);

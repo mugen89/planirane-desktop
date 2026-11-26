@@ -187,7 +187,7 @@ void App::checkForUpdate(bool manual) {
     if (!err.empty()) {
       if (manual) {
         updateNote = err;
-        notify(kTitle, err);
+        updateToast();
       }
       if (panel_) panel_->invalidate();
       return;
@@ -196,7 +196,7 @@ void App::checkForUpdate(bool manual) {
       updateVersion.clear();
       if (manual) {
         updateNote = L"Това е последната версия (" + widen(KD_VERSION_STR) + L").";
-        notify(kTitle, updateNote);
+        updateToast();
       }
       if (panel_) panel_->invalidate();
       return;
@@ -205,7 +205,7 @@ void App::checkForUpdate(bool manual) {
     if (!isInstalledCopy()) {
       // A development build or a copy run from elsewhere: say so, never replace the installed one from here.
       updateNote = L"Има версия " + widen(latest) + L" — инсталирайте я от GitHub (това копие не е инсталираното).";
-      if (manual) notify(kTitle, updateNote);
+      if (manual) updateToast();
       if (panel_) panel_->invalidate();
       return;
     }
@@ -221,6 +221,11 @@ void App::checkForUpdate(bool manual) {
   });
 }
 
+void App::updateToast() {
+  if (panel_ && panel_->visible()) panel_->invalidate();
+  else notify(kTitle, updateNote);
+}
+
 void App::startUpdate(const std::string& version, bool manual) {
   updateBusy = true;
   updateNote = L"Изтегля се версия " + widen(version) + L"…";
@@ -232,7 +237,7 @@ void App::startUpdate(const std::string& version, bool manual) {
     if (!err.empty() || !startSetup(path)) {
       updateBusy = false;
       updateNote = err.empty() ? L"Обновлението не можа да бъде пуснато." : err;
-      if (manual) notify(kTitle, updateNote);
+      if (manual) updateToast();
       if (panel_) panel_->invalidate();
       return;
     }
