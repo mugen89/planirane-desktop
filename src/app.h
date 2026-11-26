@@ -71,6 +71,16 @@ class App {
   // Another view of the table. Remembered on the server for the person, as the web does (PATCH /me/view
   // boardSubview), so the browser opens on it too; until that is stored it is asked for with ?subview=.
   void chooseSubview(const std::string& id);
+  // „За разпределяне“: an entry is picked (armed) under the stopwatch, then a card in the table takes it — „Сложи тук“.
+  // The browser has no screen for this any more (its time pane went on 2026-09-08), so the desktop is where it is done.
+  void armEntry(int entryId);  // 0 = none
+  void attachEntry(int entryId, int cardId, const AttachNeeds* answer = nullptr);  // answer: the choice / Дейност / Коментар
+  void dismissAttach(int cardId);
+  int armedEntry = 0;
+  std::map<int, AttachNeeds> attachProblems;  // card id → what the server wants first, or why it refused
+  std::set<int> attachingCards;
+  std::wstring attachNote;  // „0:45 → 5 ДДС“ for a few seconds after it worked
+  double attachNoteUntil = 0;
   std::string subviewChoice;
   void pauseTimer();
   void resumeTimer();

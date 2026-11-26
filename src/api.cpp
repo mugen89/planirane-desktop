@@ -78,9 +78,42 @@ SumRow parseRow(const Json& j) {
   if (auto a = j.find("assignees"); a && a->isArr())
     for (auto& x : a->a)
       if (x.t == Json::T::Str) r.assignees.push_back(widen(x.s));
+  if (auto c = j.find("complexity"); c && c->isObj()) {
+    r.complexity = wstr(*c, "label");
+    r.complexityHint = wstr(*c, "hint");
+  }
+  if (auto a = j.find("autonomy"); a && a->isObj()) {
+    r.autonomy = num(*a, "pct");
+    if (auto w = a->find("window"); w && w->isObj()) {
+      r.autonomyWindow = wstr(*w, "label");
+      r.autonomyRange = wstr(*w, "range");
+      r.autonomyHint = wstr(*w, "hint");
+    }
+  }
   return r;
 }
 }  // namespace
+
+AttachNeeds parseAttachNeeds(const Json& j, const std::wstring& fallback) {
+  AttachNeeds n;
+  n.code = j.str("error");
+  n.message = wstr(j, "message");
+  if (n.message.empty()) n.message = fallback;
+  n.needsDetail = j.flag("needsDetail", false);
+  n.maxChars = num(j, "maxChars");
+  if (auto s = j.find("optionSet"); s && s->isObj()) {
+    n.setName = wstr(*s, "name");
+    n.multiSelect = s->flag("multiSelect", false);
+    if (auto it = s->find("items"); it && it->isArr())
+      for (auto& i : it->a) n.options.push_back({num(i, "id"), wstr(i, "name"), wstr(i, "hint")});
+  }
+  if (auto ids = j.find("optionIds"); ids && ids->isArr())
+    for (auto& v : ids->a)
+      if (v.t == Json::T::Num) n.chosen.push_back((int)v.n);
+  n.activity = wstr(j, "activity");
+  n.comment = wstr(j, "comment");
+  return n;
+}
 
 Summary parseSummary(const Json& j) {
   Summary s;
@@ -201,9 +234,17 @@ TimeState parseTimeState(const Json& j, double receivedAt) {
     }
   }
   if (auto u = j.find("unattributed"); u && u->isArr()) {
-    // Pending rows are shown on their own; "за разпределяне" counts only what is already decided.
+    // Pending rows are shown on their own (✓ / ✕ first); "за разпределяне" is what is already decided.
     for (auto& e : u->a)
-      if (!e.flag("pending", false)) t.unattributed++;
+      if (!e.flag("pending", false)) {
+        t.unattributed++;
+        Unassigned x;
+        x.id = num(e, "id");
+        x.seconds = num(e, "seconds");
+        x.workDate = wstr(e, "workDate");
+        x.note = wstr(e, "note");
+        t.unassigned.push_back(std::move(x));
+      }
   }
   return t;
 }

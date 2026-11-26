@@ -1,5 +1,7 @@
 #include "app.h"
 
+#include <algorithm>
+
 #include "gfx.h"
 #include "install.h"
 #include "taskbar.h"
@@ -291,6 +293,30 @@ void App::command(const std::wstring& c) {
       std::wstring lane = rest.substr(p1 + 1, p2 == std::wstring::npos ? std::wstring::npos : p2 - p1 - 1);
       moveCard(_wtoi(rest.substr(0, p1).c_str()), narrow(lane), p2 == std::wstring::npos ? std::wstring() : rest.substr(p2 + 1));
     }
+  } else if (c.rfind(L"arm:", 0) == 0) {  // arm:<entry> — „Избери карта“ on a „за разпределяне“ entry (0: cancel)
+    armEntry(_wtoi(c.substr(4).c_str()));
+  } else if (c.rfind(L"attach:", 0) == 0) {  // attach:<entry>:<card>[:<option ids, comma>] — „Сложи тук“ / the form's „Сложи“
+    std::wstring rest = c.substr(7);
+    size_t p1 = rest.find(L':');
+    if (p1 != std::wstring::npos) {
+      size_t p2 = rest.find(L':', p1 + 1);
+      int entry = _wtoi(rest.substr(0, p1).c_str());
+      int card = _wtoi(rest.substr(p1 + 1, p2 == std::wstring::npos ? std::wstring::npos : p2 - p1 - 1).c_str());
+      if (p2 == std::wstring::npos) {
+        attachEntry(entry, card);
+      } else {
+        AttachNeeds answer;
+        std::wstring ids = rest.substr(p2 + 1);
+        for (size_t at = 0; at < ids.size();) {
+          size_t comma = ids.find(L',', at);
+          std::wstring one = ids.substr(at, comma == std::wstring::npos ? std::wstring::npos : comma - at);
+          if (!one.empty()) answer.chosen.push_back(_wtoi(one.c_str()));
+          if (comma == std::wstring::npos) break;
+          at = comma + 1;
+        }
+        attachEntry(entry, card, &answer);
+      }
+    }
   } else if (c.rfind(L"view:", 0) == 0) {  // view:<id> — what a tab above the table does
     chooseSubview(narrow(c.substr(5)));
   } else if (c.rfind(L"select:", 0) == 0 && panel_) {  // select:<row>[:<column>] — the panel's row / cell, as a click would
@@ -367,6 +393,9 @@ void App::signOut() {
   cardProblems.clear();
   movingCards.clear();
   subviewChoice.clear();
+  armedEntry = 0;
+  attachProblems.clear();
+  attachingCards.clear();
   error.clear();
   stateSeq_++;
   updatePill();
@@ -386,6 +415,9 @@ void App::sessionLost() {
   cardProblems.clear();
   movingCards.clear();
   subviewChoice.clear();
+  armedEntry = 0;
+  attachProblems.clear();
+  attachingCards.clear();
   stateSeq_++;
   hidePanel();
   updatePill();
@@ -408,6 +440,11 @@ void App::refresh() {
     if (r.ok()) {
       st = t;
       haveState = true;
+      // The picked entry went (attached in the browser, discarded by an administrator…): nothing to attach any more.
+      if (armedEntry && std::none_of(st.unassigned.begin(), st.unassigned.end(), [this](const Unassigned& u) { return u.id == armedEntry; })) {
+        armedEntry = 0;
+        attachProblems.clear();
+      }
       if (!user.id) {
         api.session([this](const Reply& rs, const User& u) {
           if (rs.ok() && u.id) {
@@ -511,6 +548,61 @@ void App::chooseSubview(const std::string& id) {
   if (panel_) panel_->invalidate();
 }
 
+void App::armEntry(int entryId) {
+  armedEntry = entryId;
+  attachProblems.clear();  // the forms were for the entry picked before
+  if (panel_) panel_->invalidate();
+}
+
+void App::attachEntry(int entryId, int cardId, const AttachNeeds* answer) {
+  if (!signedIn || entryId <= 0 || cardId <= 0 || attachingCards.count(cardId)) return;
+  Json b = Json::object();
+  b.set("cardId", cardId);
+  if (answer) {
+    if (!trim(answer->activity).empty()) b.set("activity", narrow(trim(answer->activity)));
+    if (!trim(answer->comment).empty()) b.set("comment", narrow(trim(answer->comment)));
+    if (!answer->options.empty() || !answer->chosen.empty()) {
+      Json ids = Json::array();
+      for (int id : answer->chosen) ids.push(id);
+      b.set("optionIds", ids);
+    }
+  }
+  int secs = 0;
+  for (auto& u : st.unassigned)
+    if (u.id == entryId) secs = u.seconds;
+  std::wstring title;
+  for (auto& k : summary.cards)
+    if (k.id == cardId) title = k.title;
+  attachingCards.insert(cardId);
+  if (panel_) panel_->invalidate();
+  api.send(L"PATCH", "/api/time/entries/" + std::to_string(entryId), &b, [this, entryId, cardId, secs, title](const Reply& r) {
+    attachingCards.erase(cardId);
+    if (r.status == 401) {
+      sessionLost();
+      return;
+    }
+    if (r.ok()) {
+      if (armedEntry == entryId) armedEntry = 0;
+      attachProblems.clear();
+      attachNote = clockText(secs, false) + L"  →  " + (title.empty() ? std::wstring(L"картата") : title);
+      attachNoteUntil = nowSec() + 8;
+      st.unassigned.erase(std::remove_if(st.unassigned.begin(), st.unassigned.end(), [entryId](const Unassigned& u) { return u.id == entryId; }),
+                          st.unassigned.end());  // at once; the refresh below confirms it
+      st.unattributed = (int)st.unassigned.size();
+    } else {
+      // 422 time_detail_required carries what is missing (a choice, Дейност, Коментар); 409 — a stopwatch runs; 403 …
+      attachProblems[cardId] = parseAttachNeeds(r.json, r.error);
+    }
+    refresh();
+    if (panel_) panel_->invalidate();
+  });
+}
+
+void App::dismissAttach(int cardId) {
+  attachProblems.erase(cardId);
+  if (panel_) panel_->invalidate();
+}
+
 void App::dismissProblem(int cardId) {
   cardProblems.erase(cardId);
   if (panel_) panel_->invalidate();
@@ -598,7 +690,8 @@ RECT App::panelRect(float& s) {
   mi.cbSize = sizeof mi;
   GetMonitorInfoW(t.mon ? t.mon : MonitorFromWindow(hwnd_, MONITOR_DEFAULTTOPRIMARY), &mi);
   int m = (int)(12 * s);
-  int w = std::min<int>((int)(920 * s), mi.rcWork.right - mi.rcWork.left - 2 * m);
+  // 1040: the widest table (by client, for a partner: 11 number columns) and still room for a firm's name.
+  int w = std::min<int>((int)(1040 * s), mi.rcWork.right - mi.rcWork.left - 2 * m);
   int h = mi.rcWork.bottom - mi.rcWork.top - 2 * m;
   int right = pill_.shown() ? anchor.right : mi.rcWork.right - m;
   int bottom = mi.rcWork.bottom - m;
@@ -750,6 +843,11 @@ void App::tick() {
   }
   if (signedIn && nowSec() - lastPoll_ >= kPollEvery) refresh();
   if (signedIn && panel_ && panel_->visible() && nowSec() - summaryAt_ >= 60) refreshSummary();  // while someone looks
+  if (attachNoteUntil > 0 && nowSec() >= attachNoteUntil) {  // „✓ Закачено …“ has been read
+    attachNoteUntil = 0;
+    attachNote.clear();
+    if (panel_) panel_->invalidate();
+  }
   if (nowSec() >= nextUpdateCheck_) {
     nextUpdateCheck_ = nowSec() + 6 * 3600 + (GetTickCount() % 900);  // a little spread, so an office does not ask at once
     checkForUpdate(false);

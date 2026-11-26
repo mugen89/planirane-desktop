@@ -16,11 +16,11 @@ glance) away. Local only, like the web app.
 | 5 | **Time without a card is started from the desktop only.** The browser keeps requiring a card at start. | Asked for („restore the unassigned times but only for the desktop“). No server change was needed: `POST /time/start` without `cardId` was never removed, only the web stopped offering it. The server still enforces `maxUnassignedTime` (3), refuses a start while time waits for ✓/✕, and the web shows such sessions as „⌖ без карта“ to attach a card. |
 | 6 | **Priority: the taskbar part.** The Win+Q overlay is an extra. | The person's priority. |
 
-## What exists (v0.3.0)
+## What exists (v0.4.0)
 
 - Sign-in (server, username, password) → a 90-day sliding session, stored encrypted for the Windows user (DPAPI); the password is never stored.
 - The taskbar button: a stopwatch whose hand moves with the seconds and two lines (running time · what it is for, or „Днес h:mm · Не тече“). Software-rendered layered window: no GPU device while idle.
-- The panel above it (acrylic flyout, almost as tall as the screen): the stopwatch strip (Пусни / Пауза / Продължи / Спри / Откажи, the stopped sessions waiting for ✓ / ✕, today's total and „за разпределяне“), the views of the unified board („Изп.“ / „УС“, remembered on the server like the web's), its summary table (a chosen row collapses the table; its cards take the room), and per card: start / attach the stopwatch, the lane menu (the web's move). Footer: „Провери за обновление“ by the version.
+- The panel above it (acrylic flyout, almost as tall as the screen): the stopwatch strip (Пусни / Пауза / Продължи / Спри / Откажи, the stopped sessions waiting for ✓ / ✕, today's total and „за разпределяне“), the views of the unified board („Изп.“ / „УС“, remembered on the server like the web's), its summary table (a chosen row collapses the table; its cards take the room), and per card: start / attach the stopwatch, the lane menu (the web's move). Under the stopwatch, „За разпределяне“: an entry recorded without a card is picked and put on a card from the table. Footer: „Провери за обновление“ by the version.
 - Tray icon + menu, single instance, command line (`--panel --hide --start --pause --resume --stop --cancel --refresh --signin --signout --quit`).
 - Polls `GET /time/state` every 30 s (the browser's rhythm), refreshes at once after an action and on unlocking the screen; hides during full-screen apps and on the lock screen.
 - Verified on screen (2026-11-26): the button covers the weather slot exactly; idle → running → idle redraws at once.
@@ -31,7 +31,7 @@ glance) away. Local only, like the web app.
 1. ✅ **Foundation + the stopwatch on the taskbar** (this slice).
 2. ✅ **Installable + updates** (0.1.0) — per-user installer: folder of choice, Start with Windows, desktop icon, Start menu, `Uninstall.exe` in the folder and the Settings › Apps entry; self-update from GitHub Releases with a SHA-256 check; `release.ps1` + a GitHub Actions workflow that builds and publishes. Tested: install → update 0.1.0 → 0.1.1 through a stand-in for GitHub → uninstall leaves nothing behind.
 3. ✅ **The collector summary in the panel** (0.2.0) — the summary table of the unified board for the person's subview, the same numbers as the browser: the computation moved into `server/src/shared/summary.ts` of the web app, which both the browser and `GET /desktop/summary` use (verified: the admin's table identical in the browser before/after the move and in the endpoint). A row or a number lists its cards; a card starts the stopwatch, or takes the running one. **0.3.0** (the user's review of 0.2.0): the views above the table, remembered on the server like the web's (`PATCH /me/view`); a chosen row collapses the table to itself; a card's lane menu (the web's own `POST /collector/cards/:id/move`, so all its rules) with „№ вх. док.“ typed under the card when closing needs it; the panel almost as tall as the screen. Tested on a scratch copy of the database (moves, closing with a number, the time rule, a view change). Still to come here: the client complexity/independence columns.
-4. **Choose the card** — partly done in 0.2.0 (a running stopwatch is attached to a card from the table); still to come: attaching a stopped / „за разпределяне“ entry.
+4. ✅ **Choose the card** (0.4.0) — a running stopwatch is attached from the table (0.2.0); a finished entry without a card („за разпределяне“) is picked under the stopwatch and put on a card („Сложи тук“), with the activity's option choice or „Дейност“ + „Коментар“ when the server asks for them (422 `time_detail_required`). The browser has no screen for this since its time pane went (2026-09-08), so the desktop is the place. On the way, a server bug: a non-administrator could not attach to a card with an option set (web CHANGELOG 333). Also 0.4.0: the client columns „сл.“ / „самост.“ (the browser's data).
 5. **Win+Q overlay** — dim the screen and show the summary table full size (Radial's overlay + hook; Win+Q is Windows Search's shortcut, so the hook takes it over, which Radial already supports).
 
 ## Server endpoints the desktop relies on
@@ -40,7 +40,7 @@ glance) away. Local only, like the web app.
 `POST /api/time/start | pause | resume | stop` (`start` with or without `cardId`) · `PATCH /api/time/running` (`cardId`) ·
 `DELETE /api/time/running` · `POST /api/time/entries/:id/confirm | discard` · `GET /api/desktop/summary?year=&month=&subview=`
 (each card with its `laneKey`) · `POST /api/collector/cards/:id/move` (`lane`, `referenceId`) · `PATCH /api/me/view`
-(`boardSubview`). Listed in the web app's `docs/API.md` too: changing their
+(`boardSubview`) · `PATCH /api/time/entries/:id` (`cardId`, `optionIds`, `activity`, `comment`). Listed in the web app's `docs/API.md` too: changing their
 shape breaks installed desktops.
 
 ## Risks and open points

@@ -2,6 +2,8 @@
 
 #include "app.h"
 
+#include <algorithm>
+
 namespace kd {
 using namespace rt;
 
@@ -124,6 +126,7 @@ void Panel::paint() {
   y += 50;
 
   y = paintTimer(RectF(x, y, x + cw, y + 64));
+  y = paintUnassigned(RectF(x, y, x + cw, H));
   paintSummary(RectF(x, y + 10, x + cw, H - 46));
 
   // ---- footer: what is going on (update, connection) · the update button · the browser · the version
@@ -177,7 +180,7 @@ float Panel::paintTimer(RectF r) {
       after([] { app().startTimer(); });
     if (blocked)
       ui.tooltip(b, !st.pending.empty() ? L"Първо решете спряното време (✓ или ✕)."
-                                        : L"Стигнат е таванът на неразпределените записи — разпределете ги в браузъра.");
+                                        : L"Стигнат е таванът на неразпределените записи — разпределете ги (под хронометъра).");
   } else {
     RectF b3(r.r - 14 - bw, by, r.r - 14, by + bh), b2(b3.l - gap - bw, by, b3.l - gap, by + bh), b1(b2.l - gap - bw, by, b2.l - gap, by + bh);
     if (paused) {
@@ -215,6 +218,54 @@ float Panel::paintTimer(RectF r) {
   return y;
 }
 
+// „За разпределяне“: time recorded without a card (a stopwatch started here without one, stopped, ✓). The browser has
+// no screen for it any more, so it is done here: pick an entry, then a card in the table — „Сложи тук“.
+float Panel::paintUnassigned(RectF r) {
+  App& a = app();
+  const UiPalette& P = ui.pal;
+  const TimeState& st = a.st;
+  const Color green = P.dark ? Color::hex(0x4ADE80) : Color::hex(0x15803D);
+  bool note = !a.attachNote.empty() && nowSec() < a.attachNoteUntil;
+  if (st.unassigned.empty() && !note) return r.t;
+  float y = r.t + 8;
+  if (note) {
+    ui.text(RectF(r.l + 4, y, r.r, y + 20), L"✓ Закачено: " + a.attachNote, 12.f, green, 600);
+    y += 22;
+  }
+  if (st.unassigned.empty()) return y;
+  int n = (int)st.unassigned.size();
+  ui.text(RectF(r.l + 4, y, r.l + 320, y + 22), L"За разпределяне  ·  " + num(n) + (n == 1 ? L" запис" : L" записа"), 12.5f, P.text, 600);
+  std::wstring hint = st.hasRunning ? L"Спрете хронометъра, за да разпределите: докато тече, друго време не се пипа."
+                      : a.armedEntry ? L"Сега изберете карта: ред или число в таблицата, после „Сложи тук“."
+                                     : L"Изберете запис, после карта в таблицата.";
+  ui.text(RectF(r.l + 320, y, r.r - 4, y + 22), hint, 11.5f, a.armedEntry && !st.hasRunning ? P.accent : P.dim, 400, Align::Right);
+  y += 26;
+  int shown = 0;
+  for (auto& u : st.unassigned) {
+    if (shown == 4) break;  // the cap is usually 3; more go one line below
+    RectF row(r.l, y, r.r, y + 34);
+    bool armed = a.armedEntry == u.id;
+    ui.card(row, 8);
+    if (armed) ui.p->rrectStroke(row.inset(0.75f), 8, P.accent, 1.5f);
+    std::wstring t = shortDate(u.workDate) + L"  ·  " + clockText(u.seconds, false) + (u.note.empty() ? L"" : L"  ·  " + u.note);
+    ui.text(RectF(row.l + 12, row.t, row.r - 160, row.b), t, 12.f, P.text);
+    RectF b(row.r - 150, row.t + 3, row.r - 6, row.b - 3);
+    int id = u.id;
+    if (armed) {
+      if (ui.button(ui.id("disarm", id), b, L"Отказ", Btn::Subtle, kCancel)) after([] { app().armEntry(0); });
+    } else if (ui.button(ui.id("armit", id), b, L"Избери карта", Btn::Standard, kAttach, !st.hasRunning)) {
+      after([id] { app().armEntry(id); });
+    }
+    y = row.b + 4;
+    shown++;
+  }
+  if (n > shown) {
+    ui.text(RectF(r.l + 4, y, r.r, y + 18), L"още " + num(n - shown) + L" — след тези", 11.f, P.faint);
+    y += 20;
+  }
+  return y;
+}
+
 // The summary table of the unified board — the same numbers as in the browser — and, under it, the cards of the
 // row or cell that was clicked.
 void Panel::paintSummary(RectF area) {
@@ -233,7 +284,7 @@ void Panel::paintSummary(RectF area) {
 
   // Column widths: the numbers fixed, the name takes the rest.
   std::vector<float> cw;
-  for (auto& c : s.layout) cw.push_back(c.key == "exec" ? 84.f : c.key == "plan" ? 62.f : 66.f);
+  for (auto& c : s.layout) cw.push_back(c.key == "exec" ? 84.f : c.key == "plan" ? 62.f : c.key == "cx" ? 40.f : c.key == "au" ? 56.f : 66.f);
   float fixed = 0;
   for (float w : cw) fixed += w;
   float nameW = area.w() - fixed - 4;
@@ -309,6 +360,14 @@ void Panel::paintSummary(RectF area) {
     if (c.key == "tasks") return count(r.noClient, P.text, false);
     if (c.key == "clients") return count(r.withClient, P.text, false);
     if (c.key == "count") return count(r.key == "done" ? r.done : r.open, P.text, false);
+    if (c.key == "cx") {
+      color = r.complexity.empty() ? P.faint : P.text;
+      return r.complexity.empty() ? L"—" : r.complexity;
+    }
+    if (c.key == "au") {
+      color = r.autonomy < 0 ? P.faint : P.text;
+      return r.autonomy < 0 ? L"—" : num(r.autonomy) + L"%";
+    }
     if (c.key == "exec") {
       std::wstring t;
       for (auto& n : r.assignees) t += (t.empty() ? L"" : L" · ") + initials(n);
@@ -316,6 +375,19 @@ void Panel::paintSummary(RectF area) {
       return t.empty() ? L"—" : t;
     }
     return L"";
+  };
+
+  // „сл.“ / „самост.“: what the browser's hover says (ClientAssessment.tsx) — the value, then the nomenclature's text.
+  auto assessTip = [&](const SumRow& r, const std::string& key) -> std::wstring {
+    if (key == "cx") {
+      if (r.complexity.empty()) return L"Нивото на сложност не е зададено за този клиент.";
+      if (r.complexityHint.empty()) return L"Сложност " + r.complexity + L" — няма описание в номенклатурата.";
+      return L"Сложност " + r.complexity + L"\n\n" + r.complexityHint;
+    }
+    if (r.autonomy < 0) return L"Очакваната самостоятелност не е зададена за този клиент.";
+    if (r.autonomyWindow.empty()) return L"Няма прозорец за " + num(r.autonomy) + L" (Админ → Самостоятелност).";
+    std::wstring head = r.autonomyWindow + L"  ·  " + num(r.autonomy) + L"%  ·  прозорец " + r.autonomyRange;
+    return r.autonomyHint.empty() ? head + L" — няма описание в номенклатурата." : head + L"\n\n" + r.autonomyHint;
   };
 
   auto drawRow = [&](const SumRow& r, RectF rr, bool total, int salt) {
@@ -349,7 +421,8 @@ void Panel::paintSummary(RectF area) {
       } else {
         ui.text(cell, t, 12.f, col, total ? 700 : 400, Align::Center);
       }
-      bool clickable = c.key != "exec" && c.key != "plan" && t != L"—";
+      if (!total && (c.key == "cx" || c.key == "au") && r.key != "none") ui.tooltip(cell, assessTip(r, c.key));
+      bool clickable = c.key != "exec" && c.key != "plan" && c.key != "cx" && c.key != "au" && t != L"—";
       if (clickable && ui.hot(cell)) ui.cursor = LoadCursorW(nullptr, IDC_HAND);
       if (clickable && ui.press(ui.id("cell", salt * 64 + (int)i), cell)) {
         bool same = selRow_ == key && selCol_ == c.key;
@@ -407,7 +480,15 @@ void Panel::paintSummary(RectF area) {
       if (key == kLaneKeys[i]) return i;
     return 0;
   };
-  auto heightOf = [&](const SumCard& k) { return !k.closed && a.cardProblems.count(k.id) ? 90.f : 50.f; };
+  // Under a card: the attach form (what the server wants for the entry), else why a move was refused.
+  auto extraOf = [&](const SumCard& k) -> float {
+    if (k.closed) return 0.f;
+    auto at = a.attachProblems.find(k.id);
+    if (at != a.attachProblems.end())
+      return 32.f + (at->second.options.empty() ? 0.f : 38.f) + (at->second.needsDetail ? 38.f : 0.f) + 6.f;
+    return a.cardProblems.count(k.id) ? 40.f : 0.f;
+  };
+  auto heightOf = [&](const SumCard& k) { return 50.f + extraOf(k); };
   float contentH = 0;
   for (auto* k : cards) contentH += heightOf(*k);
   float coff = ui.beginScroll(ui.id("cards"), cardsR, contentH);
@@ -449,7 +530,13 @@ void Panel::paintSummary(RectF area) {
     }
 
     RectF b(top.r - 112, top.cy() - 15, top.r - 10, top.cy() + 15);
-    if (st.hasRunning && st.running.cardId == id) {
+    if (a.armedEntry) {  // attaching: every open card can take the picked entry
+      bool busy = a.attachingCards.count(id) > 0;
+      if (ui.button(ui.id("put", id), b, busy ? L"Закача…" : L"Сложи тук", Btn::Accent, kAttach, !busy && !st.hasRunning)) {
+        int e = a.armedEntry;
+        after([e, id] { app().attachEntry(e, id); });
+      }
+    } else if (st.hasRunning && st.running.cardId == id) {
       ui.text(RectF(top.r - 112, top.t, top.r - 12, top.b), L"⏱ тече", 12.f, green, 600, Align::Right);
     } else if (st.hasRunning) {
       if (ui.button(ui.id("attach", id), b, L"Закачи", Btn::Subtle, kAttach, !a.busy && st.canTrack)) after([id] { app().startTimerOnCard(id); });
@@ -457,6 +544,62 @@ void Panel::paintSummary(RectF area) {
     } else {
       if (ui.button(ui.id("go", id), b, L"Пусни", Btn::Standard, kPlay, !a.busy && st.canTrack && st.pending.empty()))
         after([id] { app().startTimerOnCard(id); });
+    }
+
+    // What the server wants before it takes the picked entry: its message, the choice, „Дейност“ + „Коментар“.
+    auto ait = a.attachProblems.find(id);
+    if (ait != a.attachProblems.end()) {
+      const AttachNeeds& need = ait->second;
+      AttachNeeds& form = attachForm_[id];
+      if (form.code != need.code || form.message != need.message || form.options.size() != need.options.size()) form = need;  // a new answer
+      float yy = top.b - 2;
+      ui.text(RectF(cr.l + 16, yy, cr.r - 46, yy + 30), need.message, 11.5f, P.danger, 400, Align::Left, VAlign::Middle, true);
+      if (ui.iconButton(ui.id("adismiss", id), RectF(cr.r - 40, yy + 1, cr.r - 10, yy + 29), kCancel, L"Скрий")) after([id] { app().dismissAttach(id); });
+      yy += 32;
+      bool sending = a.attachingCards.count(id) > 0;
+      bool hasForm = !need.options.empty() || need.needsDetail;
+      bool chosenOk = need.options.empty() || (form.multiSelect ? !form.chosen.empty() : form.chosen.size() == 1);
+      bool detailOk = !need.needsDetail || (!trim(form.activity).empty() && !trim(form.comment).empty());
+      RectF send(cr.r - 140, 0, cr.r - 10, 0);
+      if (!need.options.empty()) {
+        float xx = cr.l + 16;
+        for (auto& o : need.options) {
+          bool on = std::find(form.chosen.begin(), form.chosen.end(), o.id) != form.chosen.end();
+          float w = ui.textWidth(o.name, 12.f, 600) + 26;
+          RectF chip(xx, yy + 3, std::min(xx + w, cr.r - 150), yy + 31);
+          bool hot = ui.hot(chip);
+          ui.p->rrect(chip, 7, on ? P.accent : P.text.withA(hot ? 0.09f : 0.05f));
+          ui.text(chip, o.name, 12.f, on ? P.onAccent : P.text, 600, Align::Center);
+          if (!o.hint.empty()) ui.tooltip(chip, o.hint);
+          if (hot) ui.cursor = LoadCursorW(nullptr, IDC_HAND);
+          if (ui.press(ui.id("opt", id * 64 + o.id), chip)) {
+            if (form.multiSelect) {
+              if (on) form.chosen.erase(std::remove(form.chosen.begin(), form.chosen.end(), o.id), form.chosen.end());
+              else form.chosen.push_back(o.id);
+            } else {
+              form.chosen = {o.id};
+            }
+          }
+          xx = chip.r + 6;
+        }
+        send = RectF(cr.r - 140, yy + 3, cr.r - 10, yy + 31);
+        yy += 38;
+      }
+      if (need.needsDetail) {
+        float mid = cr.l + 16 + (cr.w() - 180) * 0.42f;
+        std::wstring hintA = need.maxChars > 0 ? L"Дейност (до " + num(need.maxChars) + L" знака)" : L"Дейност";
+        ui.textBox(ui.id("act", id), RectF(cr.l + 16, yy + 3, mid - 6, yy + 31), form.activity, hintA);
+        ui.textBox(ui.id("com", id), RectF(mid, yy + 3, cr.r - 150, yy + 31), form.comment, L"Коментар");
+        send = RectF(cr.r - 140, yy + 3, cr.r - 10, yy + 31);
+        yy += 38;
+      }
+      if (hasForm && ui.button(ui.id("send", id), send, sending ? L"Закача…" : L"Сложи", Btn::Accent, kAttach,
+                               !sending && chosenOk && detailOk && a.armedEntry && !st.hasRunning)) {
+        int e = a.armedEntry;
+        AttachNeeds answer = form;
+        after([e, id, answer] { app().attachEntry(e, id, &answer); });
+      }
+      continue;
     }
 
     // Why the server did not move it — and, for a missing „№ вх. док.“, the place to type it.

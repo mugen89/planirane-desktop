@@ -15,6 +15,8 @@ Guidance for Claude Code in this repository: **Kanban Desktop**, the Windows com
 - **Card moves are the web's own move** (`POST /collector/cards/:id/move`). The server's refusal (`422`, `error` +
   `message`) decides what the card shows: `reference_required` → a „№ вх. док.“ field under it; anything else → the
   message and „Отвори в браузъра“. Never pre-check a rule here.
+- **„За разпределяне“ lives here.** The browser has had no screen for attaching time without a card since its time pane
+  went (2026-09-08); a stopwatch started here without a card can only get its card here. Keep it working.
 - **Test writes on a scratch copy, not on :8106.** Moves write card history and close cards; a view change writes the
   person's own preference (on :8106 that is the user's admin account). Copy `kanban_merge` to a scratch database, run
   the `kanban-app:merge` image on :8199 against it, point a test copy (`KANBANDESKTOP_DATA`) there, drop it all after.

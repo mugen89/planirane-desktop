@@ -33,6 +33,12 @@ struct Pending {
   bool detailRequired = false;  // проектна задача: ✓ needs Дейност + Коментар (done in the browser for now)
 };
 
+// A finished entry without a card („за разпределяне“): the panel attaches it to a card (PATCH /time/entries/:id).
+struct Unassigned {
+  int id = 0, seconds = 0;
+  std::wstring workDate, note;  // workDate: "2026-11-26"
+};
+
 struct TimeState {
   bool canTrack = false;
   int maxUnassigned = 0;
@@ -40,6 +46,7 @@ struct TimeState {
   Running running;
   std::vector<Pending> pending;
   int unattributed = 0;   // finished entries without a card ("за разпределяне")
+  std::vector<Unassigned> unassigned;  // the same entries, listed (the oldest first, as the server sends them)
   int todaySeconds = 0;
   double skew = 0;        // server clock minus this PC's clock, seconds
 };
@@ -58,6 +65,10 @@ struct SumRow {
   std::map<std::string, int> byStatus;
   int open = 0, load = 0, awaiting = 0, done = 0, planSeconds = 0, withClient = 0, noClient = 0;
   std::vector<std::wstring> assignees;
+  // „сл.“ / „самост.“ — only in the tables by client (web CHANGELOG 333): what the browser shows, resolved by the server.
+  std::wstring complexity, complexityHint;                   // the level's label ("4") and its text
+  int autonomy = -1;                                         // %, -1 = not set for this client
+  std::wstring autonomyWindow, autonomyRange, autonomyHint;  // the window it falls in ("75%", "75–95") and its text
 };
 struct SumCard {
   int id = 0, boardId = 0, normSeconds = 0;
@@ -82,6 +93,25 @@ struct Summary {
   std::vector<SubviewTab> subviews;  // only those with a table
 };
 Summary parseSummary(const rt::Json& j);
+
+// What the server wants before it takes an entry on a card — 422 `time_detail_required`: a choice from the activity's
+// option set and/or, on a project task, „Дейност“ + „Коментар“. Any other refusal: only `message`.
+struct TimeOption {
+  int id = 0;
+  std::wstring name, hint;
+};
+struct AttachNeeds {
+  std::string code;
+  std::wstring message;
+  bool needsDetail = false;  // проектна задача
+  int maxChars = 0;          // „Дейност“ at most (0: no limit)
+  std::wstring setName;
+  bool multiSelect = false;
+  std::vector<TimeOption> options;
+  std::vector<int> chosen;          // the server's starting choice (its defaults); the form's choice when sent back
+  std::wstring activity, comment;   // the same: what the server has / what the person typed
+};
+AttachNeeds parseAttachNeeds(const rt::Json& j, const std::wstring& fallback);
 
 struct Reply {
   int status = 0;         // 0: the server was not reached

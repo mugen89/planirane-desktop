@@ -1,5 +1,6 @@
 // The two windows: the panel above the taskbar button, and sign-in.
 #pragma once
+#include "api.h"
 #include "ui.h"
 
 #include <map>
@@ -22,9 +23,11 @@ class Panel : public rt::UiWindow {
   float paintTimer(rt::RectF r);         // returns where it ended
   void paintSummary(rt::RectF area);
   float paintViews(rt::RectF r);         // the views above the table; returns where it ended
+  float paintUnassigned(rt::RectF r);    // „за разпределяне“ under the stopwatch; returns where it ended
   static std::wstring toUpperBg(const std::wstring& s);
   double armedCancel_ = 0;  // "Откажи" asks once more for three seconds
   std::string selRow_, selCol_;  // the clicked row ("__total" = ОБЩО) and column ("" = the whole row)
+  std::map<int, AttachNeeds> attachForm_;  // card id → the attach form (the choice, Дейност, Коментар), seeded from the server
   std::map<int, std::wstring> refInput_;  // „№ вх. док.“ typed under a card the server would not close without one
 };
 
