@@ -73,7 +73,10 @@ void Ui::begin(ID2D1DeviceContext* dc, RectF viewport, float dtSec) {
   }
   if (popupId_) {
     for (auto& k : keys)
-      if (k.vk == VK_ESCAPE) popupId_ = 0;
+      if (k.vk == VK_ESCAPE) {
+        popupId_ = 0;
+        k.vk = 0;  // used up: Esc closes the drop-down, not the panel under it as well
+      }
   }
   if (pressed) {
     blink_ = nowSec();
