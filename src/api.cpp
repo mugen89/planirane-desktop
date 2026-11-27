@@ -266,6 +266,16 @@ SumCard parseCard(const Json& c) {
       k.hasBand = true;
       k.bandLabel = wstr(*b, "label");
     }
+  if (auto m = c.find("marks"); m && m->isObj()) {
+    if (auto p = m->find("period"); p && p->isObj()) {
+      k.periodFrom = wstr(*p, "from");
+      k.periodTo = wstr(*p, "to");
+      k.periodName = wstr(*p, "label");
+    }
+    if (auto st = m->find("bandSteps"); st && st->isArr())
+      for (auto& x : st->a)
+        if (auto h = x.find("color"); h && h->t == Json::T::Str) k.steps.push_back({wstr(x, "date"), wstr(x, "label"), hexColor(h->s)});
+  }
   return k;
 }
 
@@ -315,8 +325,14 @@ Calendar parseCalendar(const Json& j) {
   }
   cal.loaded = cal.year > 0;
   if (auto v = j.find("subview"); v && v->isObj()) cal.subviewLabel = wstr(*v, "label");
-  if (auto cards = j.find("cards"); cards && cards->isArr())
-    for (auto& c : cards->a) cal.cards.push_back(parseCard(c));
+  if (auto cards = j.find("cards"); cards && cards->isArr()) {
+    bool marks = cards->a.empty();  // a server with the calendar's other dates puts `marks` on every card (null if none)
+    for (auto& c : cards->a) {
+      cal.cards.push_back(parseCard(c));
+      if (c.find("marks")) marks = true;
+    }
+    cal.hasMarks = marks;
+  }
   return cal;
 }
 

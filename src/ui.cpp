@@ -360,6 +360,22 @@ bool Ui::radio(uint32_t i, RectF r, std::wstring_view lbl, bool on, std::wstring
   return c;
 }
 
+bool Ui::check(uint32_t i, RectF r, std::wstring_view lbl, bool& v, const wchar_t* tip) {
+  bool c = press(i, r);
+  if (c) v = !v;
+  bool h = hot(r);
+  if (h) cursor = LoadCursorW(nullptr, IDC_HAND);
+  float a = anim(i, v ? 1.f : 0.f, 20.f), q = anim(i ^ 0x5Cu, h ? 1.f : 0.f);
+  RectF box = RectF::xywh(r.l + 4, r.cy() - 8, 16, 16);
+  p->rrect(r, 6, (pal.dark ? Color(1, 1, 1, 0.05f) : Color(0, 0, 0, 0.03f)).alpha(q));
+  p->rrect(box, 4, mix(pal.control, pal.accent, a));
+  if (a < 0.98f) p->rrectStroke(box.inset(0.5f), 3.5f, pal.faint.alpha(1 - a), 1.2f);
+  if (a > 0.02f) glyph(box, L"\xE73E", 10.5f, pal.onAccent.alpha(a));  // CheckMark
+  text(RectF(box.r + 7, r.t, r.r, r.b), lbl, 12.f, pal.text, v ? 600 : 400);
+  if (tip) tooltip(r, tip);
+  return c;
+}
+
 bool Ui::combo(uint32_t i, RectF r, int& idx, const std::vector<std::wstring>& opts) {
   bool changed = false;
   uint32_t chosen = i ^ 0xC0B0u;

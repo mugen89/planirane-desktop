@@ -72,6 +72,8 @@ class Ui {
   bool slider(uint32_t id, RectF r, float& v, float lo, float hi, float step, const wchar_t* fmt, float showScale = 1.f);
   bool segmented(uint32_t id, RectF r, int& idx, const std::vector<std::wstring>& opts);
   bool radio(uint32_t id, RectF r, std::wstring_view label, bool on, std::wstring_view desc = {});
+  // A tick box with its label; flips `v` on a click and says so. `tip`: shown on hover.
+  bool check(uint32_t id, RectF r, std::wstring_view label, bool& v, const wchar_t* tip = nullptr);
   bool combo(uint32_t id, RectF r, int& idx, const std::vector<std::wstring>& opts);
   bool textBox(uint32_t id, RectF r, std::wstring& s, std::wstring_view hint = {}, const wchar_t* icon = nullptr, bool* entered = nullptr);
   // Same editing as textBox, shown as dots and never copied to the clipboard.

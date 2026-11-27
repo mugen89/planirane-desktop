@@ -11,6 +11,9 @@ struct Config {
   std::wstring username;          // prefilled at the next sign-in
   bool pill = true;               // the taskbar button
   bool winq = true;               // Win+Q opens the board over a dimmed screen (takes Win+Q from Windows Search)
+  // Календар — the dates it shows (web CHANGELOG 337): the deadline (on, as before), a project card's start, the first
+  // and last day of the card's period, the day it moves into each next urgency band. As the browser's ticks, but this PC's.
+  bool calDue = true, calStart = false, calPeriod = false, calBands = false;
   std::string updateTried;        // the last version an automatic update was attempted for…
   double updateTriedAt = 0;       // …and when (unix seconds): one attempt a day, so a broken release cannot loop
 

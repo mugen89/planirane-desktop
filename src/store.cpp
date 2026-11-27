@@ -22,6 +22,10 @@ void Config::load() {
   username = widen(j.str("username"));
   pill = j.flag("pill", pill);
   winq = j.flag("winq", winq);
+  calDue = j.flag("calDue", calDue);
+  calStart = j.flag("calStart", calStart);
+  calPeriod = j.flag("calPeriod", calPeriod);
+  calBands = j.flag("calBands", calBands);
   updateTried = j.str("updateTried");
   updateTriedAt = j.num("updateTriedAt", 0);
 }
@@ -32,6 +36,10 @@ bool Config::save() const {
   j.set("username", narrow(username));
   j.set("pill", pill);
   j.set("winq", winq);
+  j.set("calDue", calDue);
+  j.set("calStart", calStart);
+  j.set("calPeriod", calPeriod);
+  j.set("calBands", calBands);
   j.set("updateTried", updateTried);
   j.set("updateTriedAt", updateTriedAt);
   return writeFileAtomic(configPath(), j.dump(), true);

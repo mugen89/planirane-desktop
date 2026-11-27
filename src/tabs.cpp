@@ -141,6 +141,9 @@ std::wstring selfExe() {
 // GET /desktop/calendar — the board as ▧ in the browser (CalendarView.tsx): cards on their due date, future ones too (the
 // calendar ignores „дни преди“, to plan ahead), those not on the boards yet faded; due in another month, or undated, in
 // the two buckets above the grid. A day (or a bucket) → its cards, with everything a card has in the table.
+// The ticks above the grid (web CHANGELOG 337), as in the browser: besides the deadline (the only one on by default) a
+// project card's start (▶), the first and last day of the card's period (⟦ ⟧) and the day it moves into each next band
+// (→, the band's colour on its edge) — the dates are the server's (`marks`), the same the browser draws.
 void Panel::paintCalendar(RectF area) {
   App& a = app();
   const UiPalette& P = ui.pal;
@@ -180,18 +183,73 @@ void Panel::paintCalendar(RectF area) {
     return;
   }
 
-  // the cards by day, and the two buckets
+  // which dates: the ticks, kept on this PC (the browser keeps its own)
+  {
+    struct Tick {
+      const wchar_t* label;
+      bool* v;
+      const wchar_t* tip;
+    };
+    Tick ticks[] = {
+        {L"срок", &a.cfg.calDue, L"Картата в деня на срока си — както досега."},
+        {L"▶ начало", &a.cfg.calStart, L"Проектните (одитни) карти и в деня, в който започват. Другите карти нямат начало."},
+        {L"⟦ ⟧ период", &a.cfg.calPeriod,
+         L"Първият (⟦) и последният (⟧) ден на отчетния период на картата: [10.2026] → 01.10 и 31.10, [Q3] → 01.07 и 30.09; "
+         L"седмична — понеделник и неделя."},
+        {L"→ смяна на праг", &a.cfg.calBands,
+         L"Денят, в който картата минава в следващ праг на спешност — неговият цвят е на ръба ѝ. Приключената — само до деня на "
+         L"приключването."},
+    };
+    ui.text(RectF(area.l + 4, y, area.l + 66, y + 26), L"Покажи:", 12.f, P.dim, 600);
+    float x = area.l + 66;
+    for (int i = 0; i < 4; i++) {
+      float w = ui.textWidth(ticks[i].label, 12.f, 600) + 34;
+      if (ui.check(ui.id("ctick", i), RectF(x, y, x + w, y + 26), ticks[i].label, *ticks[i].v, ticks[i].tip))
+        after([] { app().cfg.save(); });
+      x += w + 6;
+    }
+    if (!cal.hasMarks && (a.cfg.calStart || a.cfg.calPeriod || a.cfg.calBands))
+      ui.text(RectF(x + 8, y, area.r, y + 26), L"Сървърът още не дава тези дати — нужна е по-нова версия на сървъра.", 11.5f, P.danger);
+    y += 34;
+  }
+
+  // the dates by day — each a card and what the day is for it — and the deadline's two buckets
   char ym[8];
   snprintf(ym, sizeof ym, "%04d-%02d", cal.year, cal.month);
   std::wstring wym = widen(ym);
-  std::map<std::wstring, std::vector<const SumCard*>> byDay;
+  struct DayMark {
+    const SumCard* k;
+    wchar_t kind;  // d: the deadline · s: the start · b: into a band · f / t: the period's first / last day
+    const BandStep* step;
+  };
+  std::map<std::wstring, std::vector<DayMark>> byDay;
   std::vector<const SumCard*> outside, undated;
-  for (auto& k : cal.cards) {
-    if (k.dueDate.size() < 10) undated.push_back(&k);
-    else if (k.dueDate.compare(0, 7, wym) != 0) outside.push_back(&k);
-    else byDay[k.dueDate.substr(0, 10)].push_back(&k);
-  }
+  auto put = [&](const std::wstring& date, DayMark m) {
+    if (date.size() >= 10 && date.compare(0, 7, wym) == 0) byDay[date.substr(0, 10)].push_back(m);
+  };
+  // in this order within a day: the deadline first, then the start, the bands, the period
+  if (a.cfg.calDue)
+    for (auto& k : cal.cards) {
+      if (k.dueDate.size() < 10) undated.push_back(&k);
+      else if (k.dueDate.compare(0, 7, wym) != 0) outside.push_back(&k);
+      else put(k.dueDate, {&k, L'd', nullptr});
+    }
+  if (a.cfg.calStart)
+    for (auto& k : cal.cards)
+      if (!k.startDate.empty()) put(k.startDate, {&k, L's', nullptr});
+  if (a.cfg.calBands)
+    for (auto& k : cal.cards)
+      for (auto& st : k.steps) put(st.date, {&k, L'b', &st});
+  if (a.cfg.calPeriod)
+    for (auto& k : cal.cards)
+      if (!k.periodFrom.empty()) {
+        put(k.periodFrom, {&k, L'f', nullptr});
+        put(k.periodTo, {&k, L't', nullptr});
+      }
   std::sort(outside.begin(), outside.end(), [](const SumCard* x, const SumCard* z) { return x->dueDate < z->dueDate; });
+  auto iconOf = [](wchar_t kind) -> const wchar_t* {
+    return kind == L's' ? L"▶" : kind == L'f' ? L"⟦" : kind == L't' ? L"⟧" : kind == L'b' ? L"→" : nullptr;
+  };
 
   auto bucket = [&](RectF b, const std::wstring& text, int n, const char* key) {
     bool on = calSel_ == key;
@@ -231,9 +289,26 @@ void Panel::paintCalendar(RectF area) {
     selCards = undated;
     selTitle = L"Без срок";
   } else if (!calSel_.empty()) {
-    auto it = byDay.find(widen(calSel_));
-    if (it != byDay.end()) selCards = it->second;
     selTitle = longDate(calSel_);
+    auto it = byDay.find(widen(calSel_));
+    if (it != byDay.end()) {
+      int n[4] = {};  // the deadline · the start · a band · the period
+      for (auto& m : it->second) {
+        n[m.kind == L'd' ? 0 : m.kind == L's' ? 1 : m.kind == L'b' ? 2 : 3]++;
+        if (std::find(selCards.begin(), selCards.end(), m.k) == selCards.end()) selCards.push_back(m.k);  // a card once
+      }
+      if (n[1] || n[2] || n[3]) {  // what the day holds, when it is more than deadlines
+        std::wstring parts;
+        auto add = [&](int c, const wchar_t* what) {
+          if (c) parts += (parts.empty() ? L"" : L" · ") + std::wstring(what) + L" " + num(c);
+        };
+        add(n[0], L"срок");
+        add(n[1], L"▶ начало");
+        add(n[2], L"→ праг");
+        add(n[3], L"⟦⟧ период");
+        selTitle += L"  ·  " + parts;
+      }
+    }
   }
   bool selected = !calSel_.empty();
 
@@ -265,7 +340,7 @@ void Panel::paintCalendar(RectF area) {
         char iso[16];
         snprintf(iso, sizeof iso, "%s-%02d", ym, day);
         auto it = byDay.find(widen(iso));
-        const std::vector<const SumCard*>* list = it == byDay.end() ? nullptr : &it->second;
+        const std::vector<DayMark>* list = it == byDay.end() ? nullptr : &it->second;
         bool isToday = today == iso, isSel = calSel_ == iso, hot = ui.hot(cell);
         ui.p->rrect(cell, 6, isSel ? P.accent.withA(0.14f) : d >= 5 ? P.text.withA(0.045f) : P.card);
         ui.p->rrectStroke(cell.inset(0.5f), 6, isToday ? P.accent : P.stroke, isToday ? 1.6f : 1.f);
@@ -277,14 +352,20 @@ void Panel::paintCalendar(RectF area) {
           int room = std::max(0, (int)((cell.b - 4 - cy) / 19));
           int show = n > room ? std::max(0, room - 1) : n;
           for (int i = 0; i < show; i++) {
-            const SumCard& k = *(*list)[i];
+            const DayMark& m = (*list)[i];
+            const SumCard& k = *m.k;
             RectF chip(cell.l + 4, cy, cell.r - 4, cy + 17);
             float fade = k.notYetVisible ? 0.5f : 1.f;  // not on the boards yet: as the browser draws it, faded
-            Color edge = k.hasBand ? k.band : statusColorOf(k.status);
+            Color edge = m.step ? m.step->color : k.hasBand ? k.band : statusColorOf(k.status);  // a band change: that band
             ui.p->rrect(chip, 3, P.text.withA(0.05f));
             ui.p->rrect(RectF(chip.l, chip.t, chip.l + 4, chip.b), 2, edge.alpha(fade));
+            float tx = chip.l + 8;
+            if (const wchar_t* icon = iconOf(m.kind)) {
+              ui.text(RectF(tx, chip.t, tx + 14, chip.b), icon, 10.5f, P.text.alpha(fade), 700);
+              tx += 13;
+            }
             std::wstring t = (k.closed ? L"✓ " : L"") + (k.clientName.empty() ? k.title : k.clientName + L" · " + k.title);
-            ui.text(RectF(chip.l + 8, chip.t, chip.r - 2, chip.b), t, 10.5f, (k.closed ? P.dim : P.text).alpha(fade));
+            ui.text(RectF(tx, chip.t, chip.r - 2, chip.b), t, 10.5f, (k.closed ? P.dim : P.text).alpha(fade));
             cy += 19;
           }
           if (show < n) ui.text(RectF(cell.l + 8, cy, cell.r - 4, cy + 17), L"+ още " + num(n - show), 10.5f, P.dim, 600);

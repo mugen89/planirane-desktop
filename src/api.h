@@ -70,6 +70,12 @@ struct SumRow {
   int autonomy = -1;                                         // %, -1 = not set for this client
   std::wstring autonomyWindow, autonomyRange, autonomyHint;  // the window it falls in ("75%", "75–95") and its text
 };
+// The day a card moves into its next urgency band, and that band (web CHANGELOG 337): the server's (`bandSteps`, the
+// same ladder its colour comes from) — the calendar shows them when „смяна на праг“ is ticked.
+struct BandStep {
+  std::wstring date, label;
+  rt::Color color;
+};
 struct SumCard {
   int id = 0, boardId = 0, normSeconds = 0, clientId = 0;
   bool hasClient = false, awaiting = false, closed = false;
@@ -81,6 +87,10 @@ struct SumCard {
   bool notYetVisible = false, hasBand = false;
   std::wstring visibleFrom, bandLabel;
   std::wstring startDate, closedAt;  // the audit timeline's bar: from — to, and when it closed
+  // The calendar's other dates (GET /desktop/calendar `marks`, web CHANGELOG 337): the first and last day of the period
+  // the card is for and its name („10.2026“, „Q3 2026“, „седмица 44“); the day it moves into each next band.
+  std::wstring periodFrom, periodTo, periodName;
+  std::vector<BandStep> steps;
   rt::Color band;
   std::wstring title, clientName, obligationCode, dueDate, lane, worker;
 };
@@ -119,6 +129,7 @@ struct Calendar {
   int year = 0, month = 0;
   std::wstring subviewLabel;
   std::vector<SumCard> cards;
+  bool hasMarks = true;  // the server sends `marks` (web CHANGELOG 337): an older one does not, and the ticks say so
 };
 Calendar parseCalendar(const rt::Json& j);
 
