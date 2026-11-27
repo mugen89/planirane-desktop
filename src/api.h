@@ -89,6 +89,14 @@ struct SubviewTab {
   std::string id, set;  // set: executor („Изп.") / partner („УС")
   std::wstring label;   // „Задачи по клиенти"
 };
+// One of the table's urgency columns (`columns`), in the server's order: просрочено стари · просрочено текущи · the
+// other bands, most urgent first · без срок. The taskbar button's counts take the most urgent of them.
+struct StatusCol {
+  std::string key;
+  std::wstring label, sub;
+  rt::Color color;
+};
+
 struct Summary {
   bool loaded = false;
   std::string subviewId, table;
@@ -100,6 +108,7 @@ struct Summary {
   std::vector<SubviewTab> subviews;  // only those with a table
   bool hasAuditCards = false;  // the person has audit project cards: the audit timeline is offered (as in the browser)
   std::map<std::string, rt::Color> bandColors;  // urgency band key → its colour (`columns`), for the bar on every card
+  std::vector<StatusCol> statusCols;            // the same columns in order, with their names
 };
 Summary parseSummary(const rt::Json& j);
 

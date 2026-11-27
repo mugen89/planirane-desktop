@@ -620,6 +620,40 @@ void Painter::glow(ID2D1Geometry* g, Color c, float sigma, float strokeW, bool f
 }
 
 // ---------------------------------------------------------------- png
+// The pixels are premultiplied BGRA (Direct2D's and the layered windows' format); a PNG wants them straight.
+bool savePngPixels(const uint8_t* bits, int w, int h, int pitch, const std::wstring& path) {
+  auto& g = gfx();
+  if (!bits || !g.wic || w <= 0 || h <= 0) return false;
+  ComPtr<IWICStream> st;
+  ComPtr<IWICBitmapEncoder> enc;
+  ComPtr<IWICBitmapFrameEncode> fr;
+  HRESULT hr = g.wic->CreateStream(&st);
+  if (SUCCEEDED(hr)) hr = st->InitializeFromFilename(path.c_str(), GENERIC_WRITE);
+  if (SUCCEEDED(hr)) hr = g.wic->CreateEncoder(GUID_ContainerFormatPng, nullptr, &enc);
+  if (SUCCEEDED(hr)) hr = enc->Initialize(st.Get(), WICBitmapEncoderNoCache);
+  if (SUCCEEDED(hr)) hr = enc->CreateNewFrame(&fr, nullptr);
+  if (SUCCEEDED(hr)) hr = fr->Initialize(nullptr);
+  if (SUCCEEDED(hr)) hr = fr->SetSize((UINT)w, (UINT)h);
+  WICPixelFormatGUID pf = GUID_WICPixelFormat32bppBGRA;
+  if (SUCCEEDED(hr)) hr = fr->SetPixelFormat(&pf);
+  if (SUCCEEDED(hr)) {
+    std::vector<uint8_t> row((size_t)w * 4 * h);
+    for (int y = 0; y < h; y++) {
+      const uint8_t* s = bits + (size_t)y * pitch;
+      uint8_t* d = row.data() + (size_t)y * w * 4;
+      for (int x = 0; x < w; x++, s += 4, d += 4) {
+        unsigned a = s[3];
+        for (int k = 0; k < 3; k++) d[k] = a ? (uint8_t)std::min(255u, (s[k] * 255u + a / 2) / a) : 0;
+        d[3] = (uint8_t)a;
+      }
+    }
+    hr = fr->WritePixels((UINT)h, (UINT)w * 4, (UINT)row.size(), row.data());
+  }
+  if (SUCCEEDED(hr)) hr = fr->Commit();
+  if (SUCCEEDED(hr)) hr = enc->Commit();
+  return SUCCEEDED(hr);
+}
+
 bool savePng(ID2D1Bitmap1* src, const std::wstring& path) {
   auto& g = gfx();
   if (!src || !g.wic) return false;
@@ -631,35 +665,9 @@ bool savePng(ID2D1Bitmap1* src, const std::wstring& path) {
   if (FAILED(cpu->CopyFromBitmap(&dp, src, &sr))) return false;
   D2D1_MAPPED_RECT m{};
   if (FAILED(cpu->Map(D2D1_MAP_OPTIONS_READ, &m))) return false;
-  ComPtr<IWICStream> st;
-  ComPtr<IWICBitmapEncoder> enc;
-  ComPtr<IWICBitmapFrameEncode> fr;
-  HRESULT hr = g.wic->CreateStream(&st);
-  if (SUCCEEDED(hr)) hr = st->InitializeFromFilename(path.c_str(), GENERIC_WRITE);
-  if (SUCCEEDED(hr)) hr = g.wic->CreateEncoder(GUID_ContainerFormatPng, nullptr, &enc);
-  if (SUCCEEDED(hr)) hr = enc->Initialize(st.Get(), WICBitmapEncoderNoCache);
-  if (SUCCEEDED(hr)) hr = enc->CreateNewFrame(&fr, nullptr);
-  if (SUCCEEDED(hr)) hr = fr->Initialize(nullptr);
-  if (SUCCEEDED(hr)) hr = fr->SetSize(sz.width, sz.height);
-  WICPixelFormatGUID pf = GUID_WICPixelFormat32bppBGRA;
-  if (SUCCEEDED(hr)) hr = fr->SetPixelFormat(&pf);
-  if (SUCCEEDED(hr)) {
-    std::vector<uint8_t> row((size_t)sz.width * 4 * sz.height);
-    for (UINT y = 0; y < sz.height; y++) {
-      const uint8_t* s = m.bits + (size_t)y * m.pitch;
-      uint8_t* d = row.data() + (size_t)y * sz.width * 4;
-      for (UINT x = 0; x < sz.width; x++, s += 4, d += 4) {
-        unsigned a = s[3];
-        for (int k = 0; k < 3; k++) d[k] = a ? (uint8_t)std::min(255u, (s[k] * 255u + a / 2) / a) : 0;
-        d[3] = (uint8_t)a;
-      }
-    }
-    hr = fr->WritePixels(sz.height, sz.width * 4, (UINT)row.size(), row.data());
-  }
-  if (SUCCEEDED(hr)) hr = fr->Commit();
-  if (SUCCEEDED(hr)) hr = enc->Commit();
+  bool ok = savePngPixels(m.bits, (int)sz.width, (int)sz.height, (int)m.pitch, path);
   cpu->Unmap();
-  return SUCCEEDED(hr);
+  return ok;
 }
 
 }  // namespace rt

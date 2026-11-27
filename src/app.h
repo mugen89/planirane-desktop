@@ -168,6 +168,7 @@ class App {
   void sessionLost();
   void updatePill();
   void updateTray();
+  std::vector<PillBadge> urgentBadges() const;  // the idle button's counts: the table's most urgent columns
   void trayMenu(POINT at);
   void notify(const std::wstring& title, const std::wstring& text);
   void updateToast();  // a manual check's outcome: the panel's footer shows it, a toast only when the panel is closed

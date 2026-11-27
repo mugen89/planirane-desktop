@@ -26,6 +26,14 @@ constexpr const wchar_t* kTitle = kAppName;
 constexpr UINT_PTR kTick = 1;
 constexpr double kPollEvery = 30.0;   // the browser's rhythm (web/src/timeState.ts, POLL_MS)
 constexpr double kReleaseAfter = 20.0;  // windows closed this long: give their graphics memory back
+constexpr double kCountsEvery = 300.0;  // the taskbar button's counts: the table again this often while the panel is closed
+
+// Seconds since the person last used the keyboard or mouse (anywhere in their Windows session).
+static double secondsSinceInput() {
+  LASTINPUTINFO li{sizeof li, 0};
+  if (!GetLastInputInfo(&li)) return 0;
+  return (GetTickCount() - li.dwTime) / 1000.0;
+}
 
 enum MenuId : UINT {
   kMenuPanel = 1, kMenuStart, kMenuPause, kMenuResume, kMenuStop, kMenuRefresh, kMenuBrowser,
@@ -276,6 +284,14 @@ void App::command(const std::wstring& c) {
   else if (c == L"cancel") cancelTimer();
   else if (c == L"update") checkForUpdate(true);
   else if (c == L"overlay") showOverlay();  // what Win+Q does
+  else if (c.rfind(L"pillshot:", 0) == 0) {  // pillshot:<png>[|<width>[|light]] — the taskbar button off screen, as it is now
+    std::wstring rest = c.substr(9);
+    size_t bar = rest.find(L'|');
+    std::wstring opts = bar == std::wstring::npos ? L"" : rest.substr(bar + 1);
+    int w = _wtoi(opts.c_str());
+    updatePill();
+    if (!pill_.snapshot(rest.substr(0, bar), w > 0 ? w : 152, opts.find(L"light") != std::wstring::npos)) logf("pillshot: failed");
+  }
   else if (c.rfind(L"shot:", 0) == 0) {  // shot:<png>[|row[|column]] — the panel with this data, drawn off screen (checks)
     std::vector<std::wstring> parts;
     std::wstring rest = c.substr(5);
@@ -485,6 +501,7 @@ void App::signOut() {
   st = {};
   user = {};
   summary = {};
+  summaryAt_ = 0;  // the next person's counts at once
   cardProblems.clear();
   movingCards.clear();
   subviewChoice.clear();
@@ -516,6 +533,7 @@ void App::sessionLost() {
   st = {};
   user = {};
   summary = {};
+  summaryAt_ = 0;  // the next person's counts at once
   cardProblems.clear();
   movingCards.clear();
   subviewChoice.clear();
@@ -1046,6 +1064,8 @@ void App::refreshSummary() {
     } else {
       summaryError = r.error;
     }
+    updatePill();  // the counts
+    updateTray();
     if (panel_) panel_->invalidate();
     if (again) refreshSummary();
   });
@@ -1199,10 +1219,45 @@ void App::updatePill() {
     pill_.show(offline ? PillIcon::Offline : PillIcon::Idle, L"Контрол", offline ? L"Няма връзка" : L"Зарежда…", 0);
     return;
   }
-  std::wstring l2 = offline ? L"Няма връзка"
-                    : !st.pending.empty() ? L"Чака решение: " + std::to_wstring(st.pending.size())
-                                          : L"Не тече";
-  pill_.show(offline ? PillIcon::Offline : PillIcon::Idle, L"Днес " + clockText(st.todaySeconds, false), l2, 0);
+  // Idle, the second line is what needs attention: no connection · stopped time waiting for ✓/✕ · the table's most
+  // urgent counts · „Нищо спешно“ when there are none.
+  std::vector<PillBadge> badges;
+  std::wstring l2;
+  if (offline) {
+    l2 = L"Няма връзка";
+  } else if (!st.pending.empty()) {
+    l2 = L"Чака решение: " + std::to_wstring(st.pending.size());
+  } else {
+    badges = urgentBadges();
+    l2 = !badges.empty() ? L"" : summary.statusCols.empty() ? L"Не тече" : L"Нищо спешно";
+  }
+  pill_.show(offline ? PillIcon::Offline : PillIcon::Idle, L"Днес " + clockText(st.todaySeconds, false), l2, 0, badges);
+}
+
+std::vector<PillBadge> App::urgentBadges() const {
+  // From the table's „Общо“ row — the same numbers as the table, in the person's scope: overdue (old and current as
+  // one) and the band after it (by default „критично“), in their columns' colours; only those above zero. The columns
+  // arrive in the server's order, „без срок“ last.
+  std::vector<PillBadge> out;
+  const auto& cols = summary.statusCols;
+  auto count = [&](const std::string& k) {
+    auto it = summary.total.byStatus.find(k);
+    return it == summary.total.byStatus.end() ? 0 : it->second;
+  };
+  const StatusCol* overdue = nullptr;
+  const StatusCol* next = nullptr;
+  int late = 0;
+  for (size_t i = 0; i < cols.size(); i++) {
+    if (cols[i].key == "overdue-old" || cols[i].key == "overdue-current") {
+      late += count(cols[i].key);
+      if (!overdue) overdue = &cols[i];
+    } else if (!next && i + 1 < cols.size()) {
+      next = &cols[i];
+    }
+  }
+  if (overdue && late > 0) out.push_back({late, overdue->label, overdue->color});
+  if (next && count(next->key) > 0) out.push_back({count(next->key), next->label, next->color});
+  return out;
 }
 
 void App::updateTray() {
@@ -1212,7 +1267,12 @@ void App::updateTray() {
   else if (st.hasRunning)
     tip += (st.running.paused ? L"\n⏸ " : L"\n⏱ ") + clockText(runningSeconds(), false) + L" · " +
            target(st.running.cardTitle, st.running.clientName);
-  else if (haveState) tip += L"\nДнес " + clockText(st.todaySeconds, false);
+  else if (haveState) {
+    tip += L"\nДнес " + clockText(st.todaySeconds, false);
+    std::wstring counts;  // the button's counts, with their names
+    for (auto& b : urgentBadges()) counts += (counts.empty() ? L"\n" : L" · ") + b.label + L" " + std::to_wstring(b.count);
+    tip += counts;
+  }
   if (trayOn_ && tip == trayTip_) return;
   trayTip_ = tip;
   NOTIFYICONDATAW ni{};
@@ -1304,6 +1364,11 @@ void App::tick() {
   }
   if (signedIn && nowSec() - lastPoll_ >= kPollEvery) refresh();
   if (signedIn && panel_ && panel_->visible() && nowSec() - summaryAt_ >= 60) refreshSummary();  // while someone looks
+  // The taskbar button's counts while the panel is closed: the table every 5 minutes, only while someone is at the PC
+  // (nobody reads an idle screen, and the server is spared); back at the keyboard, at once.
+  if (signedIn && !(panel_ && panel_->visible()) && nowSec() - summaryAt_ >= kCountsEvery &&
+      (!summary.loaded || secondsSinceInput() < kCountsEvery))
+    refreshSummary();
   if (signedIn && panel_ && panel_->visible() && tab == Tab::Calendar && nowSec() - calAt_ >= 60) loadCalendar(cal.year, cal.month);
   if (dayNoteUntil > 0 && nowSec() >= dayNoteUntil) {
     dayNoteUntil = 0;

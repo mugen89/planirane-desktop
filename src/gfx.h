@@ -130,5 +130,6 @@ Painter& painter();
 
 // Saves a D2D bitmap (GPU) as a PNG file; used by the headless render checks.
 bool savePng(ID2D1Bitmap1* src, const std::wstring& path);
+bool savePngPixels(const uint8_t* premultipliedBgra, int w, int h, int pitch, const std::wstring& path);
 
 }  // namespace rt

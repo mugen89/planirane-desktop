@@ -22,6 +22,9 @@ Guidance for Claude Code in this repository: **Kanban Desktop**, the Windows com
   would stall everyone's typing whenever a window is busy. It swallows only a plain Win+Q (and that Q's release) and
   sends the unassigned key 0xE8 (tagged, ignored by the hook) so Windows does not open Start. It can only be tested by
   the person pressing the keys — never simulate keyboard input on their PC; `--overlay` opens what Win+Q opens.
+- **The taskbar button's counts are the table's „ОБЩО“ row** (`App::urgentBadges`: overdue old + current, then the
+  next band) — never a count by rules of the desktop's own, or the button and the table could disagree. While the
+  panel is closed the summary is fetched every 5 minutes, and only while someone uses the PC.
 - **Every window the app draws must be in the frame list** (`Frames` in `App::run`): a window left out repaints only when
   input wakes it — the rail's highlight lagged one click until 0.6.0.
 - **Tabs follow the browser's and the server's rules** (`App::tabAllowed`): Админ. дейности needs the right to track time,

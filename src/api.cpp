@@ -344,7 +344,10 @@ Summary parseSummary(const Json& j) {
     }
   if (auto cs = j.find("columns"); cs && cs->isArr())
     for (auto& c : cs->a)
-      if (auto h = c.find("color"); h && h->t == Json::T::Str) s.bandColors[c.str("key")] = hexColor(h->s);
+      if (auto h = c.find("color"); h && h->t == Json::T::Str) {
+        s.bandColors[c.str("key")] = hexColor(h->s);
+        s.statusCols.push_back({c.str("key"), wstr(c, "label"), wstr(c, "sub"), hexColor(h->s)});
+      }
   if (auto v = j.find("subviews"); v && v->isArr())
     for (auto& x : v->a) s.subviews.push_back({x.str("id"), x.str("set"), wstr(x, "label")});
   if (auto rows = j.find("rows"); rows && rows->isArr())

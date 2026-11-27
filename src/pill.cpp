@@ -31,6 +31,19 @@ Color stateColor(PillIcon i, bool light) {
     default: return light ? Color(0.1f, 0.1f, 0.1f, 0.78f) : Color(1, 1, 1, 0.82f);
   }
 }
+
+// The idle counts: the number in its badge, the column's name after it.
+std::wstring badgeText(int n) { return n > 999 ? std::wstring(L"999+") : std::to_wstring(n); }
+TextStyle badgeNumber(float s) {
+  TextStyle ts = lineStyle(10.5f * s, 700);
+  ts.align = Align::Center;
+  ts.ellipsis = false;
+  return ts;
+}
+TextStyle badgeLabel(float s) { return lineStyle(11.5f * s, 400); }
+// Near-black or white on a badge, whichever stays readable: the server's `readableOn` (Rec. 601 luma > 0.6), so the
+// numbers read as on the browser's band pills.
+Color readableOn(Color c) { return 0.299f * c.r + 0.587f * c.g + 0.114f * c.b > 0.6f ? Color::hex(0x10151F) : Color(1, 1, 1); }
 }  // namespace
 
 bool Pill::create(HINSTANCE inst) {
@@ -63,6 +76,7 @@ void Pill::releaseSurface() {
   if (dib_) DeleteObject(dib_);
   mem_ = nullptr;
   dib_ = nullptr;
+  bits_ = nullptr;
   oldBmp_ = nullptr;
   dw_ = dh_ = 0;
 }
@@ -80,6 +94,7 @@ bool Pill::ensureSurface(int w, int h) {
   bi.bmiHeader.biCompression = BI_RGB;
   void* bits = nullptr;
   dib_ = CreateDIBSection(mem_, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+  bits_ = bits;
   if (!mem_ || !dib_) {
     releaseSurface();
     return false;
@@ -96,12 +111,13 @@ bool Pill::ensureSurface(int w, int h) {
   return true;
 }
 
-void Pill::show(PillIcon icon, const std::wstring& line1, const std::wstring& line2, int seconds) {
-  bool same = icon == icon_ && line1 == l1_ && line2 == l2_ && seconds == seconds_;
-  bool widthMayChange = line1.size() != l1_.size() || line2 != l2_;
+void Pill::show(PillIcon icon, const std::wstring& line1, const std::wstring& line2, int seconds, const std::vector<PillBadge>& badges) {
+  bool same = icon == icon_ && line1 == l1_ && line2 == l2_ && seconds == seconds_ && badges == badges_;
+  bool widthMayChange = line1.size() != l1_.size() || line2 != l2_ || badges != badges_;
   icon_ = icon;
   l1_ = line1;
   l2_ = line2;
+  badges_ = badges;
   seconds_ = seconds;
   if (same) return;
   dirty_ = true;  // drawn by sync() when shown again, or right here
@@ -120,9 +136,25 @@ void Pill::setEnabled(bool on) {
 int Pill::measureWidth(bool compact) {
   float s = scale_;
   float w1 = gfx().measure(l1_, lineStyle(13.f * s, 600)).x;
-  float w2 = compact ? 0.f : gfx().measure(l2_, lineStyle(11.5f * s, 400)).x;
+  float w2 = 0.f;
+  if (!badges_.empty()) {  // the counts: with their names when they fit, the numbers alone otherwise
+    float full = badgesWidth(true);
+    w2 = !compact && full <= 170.f * s ? full : badgesWidth(false);
+  } else if (!compact) {
+    w2 = gfx().measure(l2_, lineStyle(11.5f * s, 400)).x;
+  }
   float text = std::min(std::max(w1, w2), (compact ? 90.f : 170.f) * s);
   return (int)std::ceil(34.f * s + text + 12.f * s);
+}
+
+float Pill::badgesWidth(bool labels) {
+  float s = scale_, w = 0.f;
+  for (size_t i = 0; i < badges_.size(); i++) {
+    w += std::max(14.f * s, gfx().measure(badgeText(badges_[i].count), badgeNumber(s)).x + 8.f * s);
+    if (labels) w += 4.f * s + gfx().measure(badges_[i].label, badgeLabel(s)).x;
+    if (i + 1 < badges_.size()) w += (labels ? 9.f : 5.f) * s;
+  }
+  return w;
 }
 
 void Pill::sync() {
@@ -221,9 +253,17 @@ void Pill::raise() {
 void Pill::render() {
   dirty_ = false;
   int w = at_.right - at_.left, h = at_.bottom - at_.top;
-  if (w <= 0 || h <= 0 || !ensureSurface(w, h)) return;
+  if (!paint(w, h)) return;
+  POINT dst{at_.left, at_.top}, src{0, 0};
+  SIZE sz{w, h};
+  BLENDFUNCTION bf{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+  UpdateLayeredWindow(hwnd_, nullptr, &dst, &sz, mem_, &src, 0, &bf, ULW_ALPHA);
+}
+
+bool Pill::paint(int w, int h) {
+  if (w <= 0 || h <= 0 || !ensureSurface(w, h)) return false;
   RECT rc{0, 0, w, h};
-  if (FAILED(rt_->BindDC(mem_, &rc))) return;
+  if (FAILED(rt_->BindDC(mem_, &rc))) return false;
   float s = scale_;
   rt_->BeginDraw();
   rt_->SetTransform(D2D1::Matrix3x2F::Identity());
@@ -276,22 +316,67 @@ void Pill::render() {
     br->SetColor(col.f());
     rt_->DrawText(t.c_str(), (UINT32)t.size(), f.Get(), r, br.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
   };
-  if (compact_) {
+  // The idle counts: a badge per group in its column's colour (the browser's band colours), the column's name after it
+  // when all of them fit, the numbers alone otherwise. They keep the second line even on a narrow (compact) button.
+  auto drawBadges = [&](float top, float bottom) {
+    bool labels = badgesWidth(true) <= right - x;
+    float bh = 14.f * s, y0 = (top + bottom - bh) * 0.5f, at = x;
+    for (auto& b : badges_) {
+      if (at >= right) break;
+      std::wstring t = badgeText(b.count);
+      float bw = std::max(bh, gfx().measure(t, badgeNumber(s)).x + 8.f * s);
+      fillRect(D2D1::RectF(at, y0, at + bw, y0 + bh), b.color, bh * 0.5f);
+      drawText(t, badgeNumber(s), D2D1::RectF(at, y0, at + bw, y0 + bh), readableOn(b.color));
+      at += bw;
+      if (labels) {
+        float lw = gfx().measure(b.label, badgeLabel(s)).x;
+        drawText(b.label, badgeLabel(s), D2D1::RectF(at + 4.f * s, top, std::min(right, at + 6.f * s + lw), bottom), ink.alpha(lit ? 0.9f : 0.72f));
+        at += 4.f * s + lw;
+      }
+      at += (labels ? 9.f : 5.f) * s;
+    }
+  };
+  if (compact_ && badges_.empty()) {
     drawText(l1_, lineStyle(13.f * s, 600), D2D1::RectF(x, 0, right, (float)h), ink);
   } else {
     drawText(l1_, lineStyle(13.f * s, 600), D2D1::RectF(x, h * 0.5f - 17.f * s, right, h * 0.5f + 1.f * s), ink);
-    drawText(l2_, lineStyle(11.5f * s, 400), D2D1::RectF(x, h * 0.5f + 0.f * s, right, h * 0.5f + 16.f * s), ink.alpha(lit ? 0.9f : 0.72f));
+    if (!badges_.empty()) drawBadges(h * 0.5f + 0.f * s, h * 0.5f + 16.f * s);
+    else drawText(l2_, lineStyle(11.5f * s, 400), D2D1::RectF(x, h * 0.5f + 0.f * s, right, h * 0.5f + 16.f * s), ink.alpha(lit ? 0.9f : 0.72f));
   }
   HRESULT hr = rt_->EndDraw();
   if (hr == (HRESULT)D2DERR_RECREATE_TARGET) {
     rt_.Reset();
     releaseSurface();
-    return;
+    return false;
   }
-  POINT dst{at_.left, at_.top}, src{0, 0};
-  SIZE sz{w, h};
-  BLENDFUNCTION bf{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
-  UpdateLayeredWindow(hwnd_, nullptr, &dst, &sz, mem_, &src, 0, &bf, ULW_ALPHA);
+  return true;
+}
+
+bool Pill::snapshot(const std::wstring& png, int width, bool light) {
+  if (!gfx().ensureFactories() || width <= 0) return false;
+  bool cover = cover_, compact = compact_, wasLight = light_, hover = hover_, down = down_;
+  float scale = scale_;
+  Color plate = plate_;
+  cover_ = true;
+  compact_ = width < 118;  // the weather slot's rule at 100 %
+  light_ = light;
+  hover_ = down_ = false;
+  scale_ = 1.f;
+  plate_ = light ? Color::hex(0xEEEEEE) : Color::hex(0x1C1C1C);
+  bool ok = paint(width, 48);
+  if (ok) {
+    GdiFlush();
+    ok = savePngPixels((const uint8_t*)bits_, width, 48, width * 4, png);
+  }
+  cover_ = cover;
+  compact_ = compact;
+  light_ = wasLight;
+  hover_ = hover;
+  down_ = down;
+  scale_ = scale;
+  plate_ = plate;
+  dirty_ = true;  // the bitmap holds the snapshot now: the next sync paints the real button again
+  return ok;
 }
 
 LRESULT CALLBACK Pill::proc(HWND h, UINT m, WPARAM w, LPARAM l) {
